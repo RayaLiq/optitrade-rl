@@ -127,6 +127,22 @@ class MarketEnvironment():
                 self.last_trade = info.share_to_sell_now
             elif reward_function == 'baseline_relative':
                 reward = 0.0
+            elif reward_function == "inv_time_penalty":
+                # cost-like term (negative capture) – want to minimise
+                step_shortfall = (self.startingPrice - info.exec_price) * info.share_to_sell_now
+                step_shortfall /= (self.total_shares * self.startingPrice)
+
+                inv_frac  = self.shares_remaining / self.total_shares
+                time_frac = self.timeHorizon / self.num_n
+
+                alpha, beta = 0.2, 0.05      # tune later
+                reward = -step_shortfall - alpha * (inv_frac ** 2) - beta * (time_frac ** 2)
+
+            elif reward_function == "risk_adjusted_utility":
+                delta_u = (abs(self.prevUtility) - abs(currentUtility)) / abs(self.prevUtility)
+                inv_frac = self.shares_remaining / self.total_shares
+                gamma = 0.5 * self.llambda / self.tau
+                reward = delta_u - gamma * self.singleStepVariance * inv_frac
             else:
                 raise ValueError(f"Unknown reward function: {reward_function}")
 

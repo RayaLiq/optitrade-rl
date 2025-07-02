@@ -27,10 +27,12 @@ reward_functions = [
     "stepwise_shortfall",
     "hybrid_shortfall_risk",
     "smoothness_penalty",
-    "baseline_relative"
+    "baseline_relative",
+    "inv_time_penalty",
+    "risk_adjusted_utility"
 ]
 
-def run_experiment(reward_function: str, n_episodes: int = 10000, seed: int = 0):
+def run_experiment(reward_function: str, n_episodes: int = 1000, seed: int = 0):
     logger.info(f"Running experiment with reward_function = '{reward_function}'")
 
     env = MarketEnvironment(randomSeed=seed)
@@ -50,7 +52,7 @@ def run_experiment(reward_function: str, n_episodes: int = 10000, seed: int = 0)
         total_reward = 0
         done = False
         while not done:
-            action = agent.act(state)
+            action = agent.act(state, add_noise=True)
             next_state, reward, done, info = env.step(action, reward_function=reward_function)
 
             # Adjust reward for special cases
@@ -98,7 +100,7 @@ def run_experiment(reward_function: str, n_episodes: int = 10000, seed: int = 0)
 # Run and save results
 results = {}
 for rf in reward_functions:
-    rewards, shortfalls = run_experiment(rf, n_episodes=10000)
+    rewards, shortfalls = run_experiment(rf, n_episodes=1000)
     results[rf] = {"rewards": rewards, "shortfalls": shortfalls}
 
 # ====== Convert results dictionary to DataFrame ======

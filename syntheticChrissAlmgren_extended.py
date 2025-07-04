@@ -1,6 +1,7 @@
 import random
 import numpy as np
 import collections
+from rewards import REWARD_FN_MAP
 
 # Financial parameters
 ANNUAL_VOLAT = 0.12
@@ -103,32 +104,10 @@ class MarketEnvironment():
             currentUtility = self.compute_AC_utility(self.shares_remaining)
 
             # ----------------------------- Reward Logic ----------------------------- #
-            if reward_function == 'ac_utility':
-                reward = (abs(self.prevUtility) - abs(currentUtility)) / abs(self.prevUtility)
-            elif reward_function == 'capture':
-                reward = info.share_to_sell_now * info.exec_price / (self.total_shares * self.startingPrice)
-            elif reward_function == 'final_shortfall':
-                reward = 0.0
-            elif reward_function == 'custom_penalty':
-                penalty = 0.00001 * (info.share_to_sell_now ** 2)
-                reward = (info.share_to_sell_now * info.exec_price - penalty) / (self.total_shares * self.startingPrice)
-            elif reward_function == 'stepwise_shortfall':
-                reward = - (info.exec_price - self.startingPrice) * info.share_to_sell_now
-            elif reward_function == 'hybrid_shortfall_risk':
-                risk_penalty = 1e-7 * (self.shares_remaining ** 2)
-                reward = - (info.exec_price - self.startingPrice) * info.share_to_sell_now - risk_penalty
-            elif reward_function == 'smoothness_penalty':
-                if self.k > 1:
-                    trade_diff = info.share_to_sell_now - self.last_trade
-                    smooth_penalty = 0.00001 * (trade_diff ** 2)
-                else:
-                    smooth_penalty = 0.0
-                reward = - (info.exec_price - self.startingPrice) * info.share_to_sell_now - smooth_penalty
-                self.last_trade = info.share_to_sell_now
-            elif reward_function == 'baseline_relative':
-                reward = 0.0
-            else:
-                raise ValueError(f"Unknown reward function: {reward_function}")
+            reward_fn = REWARD_FN_MAP.get(reward_function)
+            if reward_fn is None:
+                raise ValueError(f"Unknown reward {reward_function}")
+            reward = reward_fn(self, info, action)
 
             self.prevUtility = currentUtility
 

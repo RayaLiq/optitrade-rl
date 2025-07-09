@@ -82,6 +82,38 @@ def risk_buffered_deltaU(env, info, action=None):
     return delta_u - gamma * env.singleStepVariance * inv_frac
 
 
+def Implementation_Shortfall_Focused(env, info, action=None):
+    # Calculate incremental implementation shortfall improvement
+    current_value = env.shares_remaining * env.startingPrice
+    new_value = env.shares_remaining * info.price
+    return (current_value - new_value) / env.startingPrice 
+
+
+def Implemetation_Shortfall_Time_Sensitive(env, info, action=None):
+    current_value = env.shares_remaining * env.startingPrice
+    new_value = env.shares_remaining * info.price
+    time_weight = 1 + 0.5*(1 - env.timeHorizon/env.num_n)  # 1x early, 1.5x late
+    return time_weight * (current_value - new_value) / env.startingPrice
+
+
+def permanent_impact_penalty(env, info, action=None):
+    # Penalize actions that cause long-term price depression
+    impact_ratio = info.currentPermanentImpact / (env.gamma * env.dtv * 0.01)
+    return -impact_ratio * info.share_to_sell_now  
+
+def VWAP_Benchmarking(env, info, action=None):
+    env.cumulative_volume += info.share_to_sell_now
+    env.vwap_numerator += info.share_to_sell_now * info.exec_price
+    vwap = env.vwap_numerator / env.cumulative_volume
+    return (info.exec_price - vwap) * info.share_to_sell_now  
+
+def Market_Aware_Reward(env, info, action=None):
+    # Incorporate market trend direction
+    market_return = np.mean(list(env.logReturns))
+    trend_alignment = 1 if market_return < 0 else -1  # Sell faster in downturns
+    return trend_alignment * info.share_to_sell_now / env.total_shares
+
+
 RewardFn = Callable[..., float]
 REWARD_FN_MAP: Dict[str, RewardFn] = {
     "ac_utility": ac_utility,
@@ -95,4 +127,9 @@ REWARD_FN_MAP: Dict[str, RewardFn] = {
     "advantage_utility": advantage_utility,
     "momentum_capture": momentum_capture,
     "risk_buffered_deltaU": risk_buffered_deltaU,
+    "Implementation_Shortfall_Focused": Implementation_Shortfall_Focused,
+    "Implemetation_Shortfall_Time_Sensitive": Implemetation_Shortfall_Time_Sensitive,
+    "permanent_impact_penalty": permanent_impact_penalty,
+    "Market-Aware_Reward": Market_Aware_Reward,
+    "VWAP_Benchmarking": VWAP_Benchmarking
 }

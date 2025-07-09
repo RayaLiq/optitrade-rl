@@ -27,7 +27,12 @@ reward_functions = [
     "stepwise_shortfall",
     "hybrid_shortfall_risk",
     "smoothness_penalty",
-    "baseline_relative"
+    "baseline_relative",
+    "Implementation_Shortfall_Focused",
+    "Implemetation_Shortfall_Time_Sensitive"
+    "permanent_impact_penalty",
+    "Market-Aware Reward",
+    "VWAP_Benchmarking"
 ]
 
 def run_experiment(reward_function: str, n_episodes: int = 10000, seed: int = 0):
@@ -56,18 +61,51 @@ def run_experiment(reward_function: str, n_episodes: int = 10000, seed: int = 0)
             # Adjust reward for special cases
             if reward_function == "final_shortfall" and done:
                 reward = -info.implementation_shortfall / (env.total_shares * env.startingPrice)
+
             elif reward_function == "baseline_relative" and done:
                 ac_shortfall = env.get_AC_expected_shortfall(env.total_shares)
                 reward = (ac_shortfall - info.implementation_shortfall) / ac_shortfall
+
             elif reward_function == "stepwise_shortfall":
                 reward = reward  # already dense shortfall-based
+
             elif reward_function == "hybrid_shortfall_risk":
                 impact_penalty = 0.00001 * (info.share_to_sell_now ** 2) if hasattr(info, 'share_to_sell_now') else 0
                 reward = ((env.startingPrice - info.exec_price) * info.share_to_sell_now - impact_penalty) / (env.total_shares * env.startingPrice)
+
             elif reward_function == "smoothness_penalty":
                 smooth_penalty = abs(action - agent.last_action) if hasattr(agent, 'last_action') else 0
                 reward = float(reward) - 0.01 * smooth_penalty
                 agent.last_action = action
+
+            elif reward_function == "Implementation_Shortfall_Focused":
+                # Calculate incremental implementation shortfall improvement
+                current_value = env.shares_remaining * env.startingPrice
+                new_value = env.shares_remaining * info.price
+                reward = (current_value - new_value) / env.startingPrice 
+
+            elif reward_function == "Implemetation_Shortfall_Time_Sensitive":
+                current_value = env.shares_remaining * env.startingPrice
+                new_value = env.shares_remaining * info.price
+                time_weight = 1 + 0.5*(1 - env.timeHorizon/env.num_n)  # 1x early, 1.5x late
+                reward = time_weight * (current_value - new_value) / env.startingPrice
+
+            elif reward_function == "permanent_impact_penalty":
+                # Penalize actions that cause long-term price depression
+                impact_ratio = info.currentPermanentImpact / (env.gamma * env.dtv * 0.01)
+                reward = -impact_ratio * info.share_to_sell_now  
+
+            elif reward_function == "VWAP_Benchmarking":
+                env.cumulative_volume += info.share_to_sell_now
+                env.vwap_numerator += info.share_to_sell_now * info.exec_price
+                vwap = env.vwap_numerator / env.cumulative_volume
+                reward = (info.exec_price - vwap) * info.share_to_sell_now      
+
+            elif reward_function == "Market_Aware_Reward":
+                # Incorporate market trend direction
+                market_return = np.mean(list(env.logReturns))
+                trend_alignment = 1 if market_return < 0 else -1  # Sell faster in downturns
+                reward = trend_alignment * info.share_to_sell_now / env.total_shares
 
             reward = float(reward)
             agent.step(state, action, reward, next_state, done)

@@ -65,6 +65,9 @@ class MarketEnvironment():
         self.eta = ETA
         self.gamma = GAMMA
 
+        self.cumulative_volume = 0
+        self.vwap_numerator = 0
+
         # Initialize the GBM parameters
         self.delta_t = DELTA_T
         self.mu = EXPECTED_RETURN

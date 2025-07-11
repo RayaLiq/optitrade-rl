@@ -29,9 +29,9 @@ reward_functions = [
     "smoothness_penalty",
     "baseline_relative",
     "Implementation_Shortfall_Focused",
-    "Implemetation_Shortfall_Time_Sensitive"
+    "Implemetation_Shortfall_Time_Sensitive",
     "permanent_impact_penalty",
-    "Market-Aware Reward",
+    "Market_Aware_Reward",
     "VWAP_Benchmarking"
 ]
 

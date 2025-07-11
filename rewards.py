@@ -55,6 +55,20 @@ def baseline_relative(env, info, action):
     return 0.0
 
 
+def inv_time_penalty(env, info, action=None):
+    """Encourages finishing earlier. Penalty increases over time."""
+    inv_frac = env.shares_remaining / env.total_shares
+    time_frac = 1.0 - env.timeHorizon / env.num_n
+    penalty = time_frac * inv_frac
+    return -penalty
+
+def risk_adjusted_utility(env, info, action=None):
+    """AC-style utility with explicit risk adjustment for remaining shares."""
+    delta_u = (abs(env.prevUtility) - abs(env.compute_AC_utility(env.shares_remaining))) / abs(env.prevUtility)
+    risk_term = 0.5 * env.llambda * env.singleStepVariance * (env.shares_remaining / env.total_shares)
+    return delta_u - risk_term
+
+
 def advantage_utility(env, info, action=None):
     """Per‑step advantage over AC baseline expected cost."""
     step_sf = _step_shortfall(env, info)
@@ -67,7 +81,10 @@ def advantage_utility(env, info, action=None):
 def momentum_capture(env, info, action=None, kappa: float = 1.5, alpha: float = 0.2):
     step_sf = _step_shortfall(env, info)
     if len(env.logReturns) >= 6:
-        mom = np.log(env.prevPrice / env.logReturns[0])
+        if abs(env.logReturns[0]) > 1e-6:
+            mom = np.log(env.prevPrice / np.exp(env.logReturns[0]))
+        else:
+            mom = 0.0
     else:
         mom = 0.0
     inv_frac = env.shares_remaining / env.total_shares
@@ -124,6 +141,8 @@ REWARD_FN_MAP: Dict[str, RewardFn] = {
     "hybrid_shortfall_risk": hybrid_shortfall_risk,
     "smoothness_penalty": smoothness_penalty,
     "baseline_relative": baseline_relative,
+    "inv_time_penalty": inv_time_penalty,
+    "risk_adjusted_utility": risk_adjusted_utility,
     "advantage_utility": advantage_utility,
     "momentum_capture": momentum_capture,
     "risk_buffered_deltaU": risk_buffered_deltaU,

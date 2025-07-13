@@ -1,0 +1,66 @@
+# Python cache files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Jupyter notebook checkpoints
+.ipynb_checkpoints
+
+# Virtual environments
+venv/
+env/
+.drl-env/
+.drl-trading/
+.venv/
+
+# Environment files
+.env
+.env.*
+
+# PyCharm IDE files
+.idea/
+
+# VS Code settings
+.vscode/
+
+# Data files (csv, excel, hdf5)
+*.csv
+*.xlsx
+*.xls
+*.hdf5
+
+# Log files
+logs/
+*.log
+
+# Model checkpoints (PyTorch, TensorFlow)
+*.ckpt
+*.pth
+*.pt
+*.h5
+
+# Outputs (plots, figures)
+*.png
+*.jpg
+*.jpeg
+*.pdf
+*.svg
+
+# Debug files
+*.egg-info/
+dist/
+build/
+*.egg
+
+# MacOS files
+.DS_Store
+
+# Coverage reports
+.coverage
+coverage.xml
+htmlcov/
+
+# Profiler outputs
+.prof
+*.prof
+*.pstats

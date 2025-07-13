@@ -1,7 +1,7 @@
+from logging import info
 import random
 import numpy as np
 import collections
-
 
 # ------------------------------------------------ Financial Parameters --------------------------------------------------- #
 
@@ -57,7 +57,8 @@ class MarketEnvironment():
     def __init__(self, randomSeed = 0,
                  lqd_time = LIQUIDATION_TIME,
                  num_tr = NUM_N,
-                 lambd = LLAMBDA):
+                 lambd = LLAMBDA,
+                 fee_config=None):
         
         # Set the random seed
         random.seed(randomSeed)
@@ -78,6 +79,12 @@ class MarketEnvironment():
         self.singleStepVariance = SINGLE_STEP_VARIANCE
         self.eta = ETA
         self.gamma = GAMMA
+
+        # Fee parameters (default if not provided)
+        fee_config = fee_config or {}
+        self.fee_fixed = fee_config.get("fixed", 10.0)
+        self.fee_prop = fee_config.get("prop", 0.001)
+
 
         # Initialize the GBM parameters
         self.delta_t = DELTA_T
@@ -159,7 +166,7 @@ class MarketEnvironment():
         self.prevUtility = self.compute_AC_utility(self.total_shares)
         
 
-    def step(self, action):
+    def step(self, action, reward_function='default'):
         
         # Create a class that will be used to keep track of information about the transaction
         class Info(object):
@@ -179,9 +186,11 @@ class MarketEnvironment():
             info.implementation_shortfall = self.total_shares * self.startingPrice - self.totalCapture
 
             # Calculate total fees paid
-            info.total_fixed_fees = FIXED_FEE_PER_TRADE * (self.num_n - self.timeHorizon)
-            info.total_proportional_fees = PROPORTIONAL_FEE_RATE * (self.total_shares * self.startingPrice - self.totalCapture)
+            info.total_fixed_fees = self.fee_fixed * (self.num_n - self.timeHorizon)
+            gross_trade_value = self.total_shares * self.startingPrice
+            info.total_proportional_fees = self.fee_prop * (gross_trade_value - self.totalCapture)
             info.total_fees = info.total_fixed_fees + info.total_proportional_fees
+
 
 
             info.expected_shortfall = self.get_expected_shortfall(self.total_shares)
@@ -253,8 +262,7 @@ class MarketEnvironment():
             trade_value = info.share_to_sell_now * info.exec_price
 
             # Calculate trading fees
-            fixed_fee = FIXED_FEE_PER_TRADE if info.share_to_sell_now > 0 else 0
-            proportional_fee = PROPORTIONAL_FEE_RATE * trade_value
+            fixed_fee, proportional_fee = self.compute_fees(info.exec_price, info.share_to_sell_now)
             total_fees = fixed_fee + proportional_fee
 
             # Calculate net proceeds after fees
@@ -287,7 +295,17 @@ class MarketEnvironment():
             # Calculate incremental implementation shortfall improvement
             current_value = self.shares_remaining * self.startingPrice
             new_value = self.shares_remaining * info.price
-            reward = (current_value - new_value) / self.startingPrice
+            if reward_function == "final_shortfall" and info.done:
+                reward = -info.implementation_shortfall / (self.total_shares * self.startingPrice)
+            elif reward_function == "stepwise_profit":
+                reward = (current_value - new_value) / self.startingPrice
+            elif reward_function == "fees_penalty":
+                reward = -info.total_fees / self.total_shares
+            elif reward_function == "hybrid":
+                reward = (current_value - new_value) / self.startingPrice - 0.00001 * info.total_fees
+            else:
+                reward = (current_value - new_value) / self.startingPrice
+
 
 
         else:
@@ -316,6 +334,13 @@ class MarketEnvironment():
         ti = (self.epsilon * np.sign(sharesToSell)) + ((self.eta / self.tau) * sharesToSell)
         return ti
     
+    def compute_fees(self, exec_price, shares):
+        value = exec_price * shares
+        fixed = FIXED_FEE_PER_TRADE if shares > 0 else 0
+        proportional = PROPORTIONAL_FEE_RATE * value
+        return fixed, proportional
+
+    
     def get_expected_shortfall(self, sharesToSell):
         # Calculate the expected shortfall according to equation (8) of the AC paper
         ft = 0.5 * self.gamma * (sharesToSell ** 2)        
@@ -324,8 +349,9 @@ class MarketEnvironment():
 
         # Add expected fees (fixed fee per trade + proportional fee)
         expected_trades = self.num_n
-        expected_fixed_fees = FIXED_FEE_PER_TRADE * expected_trades
-        expected_prop_fees = PROPORTIONAL_FEE_RATE * (sharesToSell * self.startingPrice)
+        expected_fixed_fees = self.fee_fixed * expected_trades
+        expected_prop_fees = self.fee_prop * (sharesToSell * self.startingPrice)
+
     
         return ft + st + tt + expected_fixed_fees + expected_prop_fees
 

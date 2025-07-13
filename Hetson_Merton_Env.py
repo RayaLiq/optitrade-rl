@@ -1,3 +1,4 @@
+from logging import info
 import random
 import numpy as np
 import collections
@@ -52,10 +53,12 @@ MERTON_SIGMA_J = 0.1      # Jump size volatility
 
 class MarketEnvironment():
     
-    def __init__(self, randomSeed = 0,
-                 lqd_time = LIQUIDATION_TIME,
-                 num_tr = NUM_N,
-                 lambd = LLAMBDA):
+    def __init__(self, randomSeed=0,
+             lqd_time=LIQUIDATION_TIME,
+             num_tr=NUM_N,
+             lambd=LLAMBDA,
+             fee_config=None):
+
         
         # Set the random seed
         random.seed(randomSeed)
@@ -115,6 +118,12 @@ class MarketEnvironment():
         self.jump_sigma = MERTON_SIGMA_J
 
         self.current_variance = HESTON_V0  # Reset variance
+        if fee_config is None:
+            fee_config = {}
+
+        self.fee_fixed = fee_config.get("fixed", 10.0)
+        self.fee_prop = fee_config.get("prop", 0.001)
+
         
         
     def reset(self, seed = 0, liquid_time = LIQUIDATION_TIME, num_trades = NUM_N, lamb = LLAMBDA):
@@ -175,7 +184,14 @@ class MarketEnvironment():
             self.transacting = False
             info.done = True
             info.implementation_shortfall = self.total_shares * self.startingPrice - self.totalCapture
+
+            info.total_fixed_fees = self.fee_fixed * (self.num_n - self.timeHorizon)
+            gross_trade_value = self.total_shares * self.startingPrice
+            info.total_proportional_fees = self.fee_prop * (gross_trade_value - self.totalCapture)
+            info.total_fees = info.total_fixed_fees + info.total_proportional_fees
+
             info.expected_shortfall = self.get_expected_shortfall(self.total_shares)
+
             info.expected_variance = self.singleStepVariance * self.tau * self.totalSRSQ
             info.utility = info.expected_shortfall + self.llambda * info.expected_variance
             
@@ -297,19 +313,35 @@ class MarketEnvironment():
         ft = 0.5 * self.gamma * (sharesToSell ** 2)        
         st = self.epsilon * sharesToSell
         tt = (self.eta_hat / self.tau) * self.totalSSSQ
-        return ft + st + tt
 
-    
+        # Add expected fees (fixed fee per trade + proportional fee)
+        expected_trades = self.num_n
+        expected_fixed_fees = self.fee_fixed * expected_trades
+        expected_prop_fees = self.fee_prop * (sharesToSell * self.startingPrice)
+
+        return ft + st + tt + expected_fixed_fees + expected_prop_fees
+
     def get_AC_expected_shortfall(self, sharesToSell):
         # Calculate the expected shortfall for the optimal strategy according to equation (20) of the AC paper
         ft = 0.5 * self.gamma * (sharesToSell ** 2)        
         st = self.epsilon * sharesToSell        
-        tt = self.eta_hat * (sharesToSell ** 2)       
-        nft = np.tanh(0.5 * self.kappa * self.tau) * (self.tau * np.sinh(2 * self.kappa * self.liquidation_time) \
-                                                      + 2 * self.liquidation_time * np.sinh(self.kappa * self.tau))       
-        dft = 2 * (self.tau ** 2) * (np.sinh(self.kappa * self.liquidation_time) ** 2)   
-        fot = nft / dft       
-        return ft + st + (tt * fot)  
+        tt = self.eta_hat * (sharesToSell ** 2)
+
+        nft = np.tanh(0.5 * self.kappa * self.tau) * (
+            self.tau * np.sinh(2 * self.kappa * self.liquidation_time)
+            + 2 * self.liquidation_time * np.sinh(self.kappa * self.tau)
+        )
+        dft = 2 * (self.tau ** 2) * (np.sinh(self.kappa * self.liquidation_time) ** 2)
+        fot = nft / dft
+        ac_shortfall = ft + st + (tt * fot)
+
+        # Add expected fees
+        expected_trades = self.num_n
+        expected_fixed_fees = self.fee_fixed * expected_trades
+        expected_prop_fees = self.fee_prop * (sharesToSell * self.startingPrice)
+
+        return ac_shortfall + expected_fixed_fees + expected_prop_fees
+ 
         
     
     def get_AC_variance(self, sharesToSell):

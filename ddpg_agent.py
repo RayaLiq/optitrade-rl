@@ -2,7 +2,7 @@ import numpy as np
 import random
 import copy
 from collections import namedtuple, deque
-from action_transforms import transform_action
+from actions import transform_action
 
 from model import Actor, Critic
 

@@ -4,3 +4,4 @@ matplotlib
 tqdm
 pandas
 gym
+stable-baselines3[extra]

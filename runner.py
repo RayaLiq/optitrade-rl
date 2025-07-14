@@ -9,9 +9,11 @@ from tqdm import trange
 import seaborn as sns
 import matplotlib.pyplot as plt
 
+
 from rewards import REWARD_FN_MAP
 from syntheticChrissAlmgren_extended import MarketEnvironment
 from ddpg_agent import Agent
+from action_transforms import transform_action
 
 
 def make_env(env_name: str, seed: int) -> MarketEnvironment:
@@ -76,6 +78,40 @@ def train_once(env_name: str, agent_name: str, reward_fn: str, episodes: int, se
 
     return (np.mean(rewards), np.std(rewards), np.mean(shortfalls), np.std(shortfalls))
 
+def run_action_transform_test(transform_methods: List[str], seed_count: int, output_dir: Path):  
+    results = {}
+    for method in transform_methods:
+        shortfalls = []
+        for seed in range(seed_count):
+            env = MarketEnvironment(randomSeed=seed)
+            env.reset(seed=seed)
+            env.start_transactions()
+            agent = Agent(state_size=8, action_size=1, random_seed=seed)
+            state = env.initial_state
+            done = False
+            while not done:
+                action = agent.act(state, add_noise=False, transform_method=method)  
+                next_state, reward, done, info = env.step(action)
+                state = next_state
+            shortfalls.append(getattr(info, "implementation_shortfall", np.nan))
+        results[method] = {
+            'mean_shortfall': np.nanmean(shortfalls),
+            'std_shortfall': np.nanstd(shortfalls),
+        }
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    df = pd.DataFrame(results).T.reset_index().rename(columns={"index": "method"})
+    df.to_csv(output_dir / "action_transform_results.csv", index=False)
+
+    plt.figure(figsize=(10, 5))
+    plt.bar(df['method'], df['mean_shortfall'], yerr=df['std_shortfall'], capsize=5, color='skyblue')
+    plt.title("Comparison of Action Transformation Methods")
+    plt.ylabel("Implementation Shortfall ($)")
+    plt.xlabel("Transformation Method")
+    plt.grid(True)
+    plt.tight_layout()
+    plt.savefig(output_dir / "action_transform_plot.png")
+    plt.close()
 
 def main(argv: List[str] | None = None):
     p = argparse.ArgumentParser("runner")
@@ -88,9 +124,18 @@ def main(argv: List[str] | None = None):
     p.add_argument("--csv-dir", default="runs", help="folder to dump CSVs")
     p.add_argument("--no-noise", action="store_true", help="turn off exploration noise")
     p.add_argument("--plot", action="store_true", help="plot summary bar + box plots if comparing")
+    p.add_argument("--action-test", action="store_true", help="Run action transformation test")  
+    p.add_argument("--transform-methods", nargs="+", default=["linear", "square", "sqrt", "exp", "sigmoid", "clip"], help="Action transforms")
+
     args = p.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+    
+    csv_dir = Path(args.csv_dir)
+    
+    if args.action_test:  
+        run_action_transform_test(args.transform_methods, seed_count=50, output_dir=csv_dir / "action_transform")  
+        return 
 
     if args.compare is not None:
         if len(args.compare) == 0 or args.compare[0].lower() == "all":
@@ -100,7 +145,6 @@ def main(argv: List[str] | None = None):
     else:
         batch = args.reward
 
-    csv_dir = Path(args.csv_dir)
 
     summary = {}
     for r in batch:

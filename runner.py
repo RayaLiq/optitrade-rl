@@ -215,14 +215,16 @@ def main(argv: List[str] | None = None):
 
         # Plot by action (if >1 action)
         if df_all["Action"].nunique() > 1:
-            plt.figure(figsize=(10, 6))
+            plt.figure(figsize=(max(10, 0.9 * df_all['Action'].nunique()), 6))
             sns.barplot(data=df_all, x="Action", y="shortfall_mean",
                         palette="magma", errorbar="sd")
             plt.ylabel("Avg Implementation Shortfall ($)")
             plt.title(f"Shortfall by Action  (Reward = {df_all['Reward'].iloc[0]})")
+            plt.xticks(rotation=45, ha="right")
             plt.tight_layout()
             plt.savefig(csv_dir / "shortfall_by_action.png")
             plt.close()
+
 
 
 if __name__ == "__main__":

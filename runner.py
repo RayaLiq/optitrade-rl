@@ -27,9 +27,16 @@ def make_env(env_name: str, seed: int) -> MarketEnvironment:
         raise ValueError(f"Unknown env format '{env_name}'. Use 'ac_default' or 'module:ClassName'.")
 
 
-def make_agent(agent_name: str, state_dim: int, action_dim: int, seed: int):
+
+def make_agent(agent_name: str, state_dim: int, action_dim: int, seed: int, env_name: str):
     if agent_name == "ddpg":
         return Agent(state_size=state_dim, action_size=action_dim, random_seed=seed)
+    elif agent_name == "sac":
+        from sac import SB3SACAgent
+        return SB3SACAgent(env=make_env(env_name, seed))
+    elif agent_name == "td3": 
+        from td3 import SB3TD3Agent
+        return SB3TD3Agent(env=make_env(env_name, seed))
     try:
         module_name, cls_name = agent_name.split(":")
         mod = importlib.import_module(module_name)
@@ -37,44 +44,74 @@ def make_agent(agent_name: str, state_dim: int, action_dim: int, seed: int):
         return cls(state_size=state_dim, action_size=action_dim, random_seed=seed)
     except ValueError:
         raise ValueError(
-            f"Unknown agent '{agent_name}'. Use 'ddpg' or 'module:ClassName'.")
-
+            f"Unknown agent '{agent_name}'. Use 'ddpg', 'sac', 'td3', or 'module:ClassName'.")
 
 def train_once(env_name: str, agent_name: str, reward_fn: str, episodes: int, seed: int,
-               csv_dir: Path, noiseflag: bool = True):
+               csv_dir: Path, noiseflag: bool = True, steps_per_episode: int = None):
     log = logging.getLogger(f"{agent_name}:{reward_fn}")
 
     env = make_env(env_name, seed)
-    agent = make_agent(agent_name, env.observation_space_dimension(), env.action_space_dimension(), seed)
+    
+    if agent_name in ["sac", "td3"]:
+        agent = make_agent(agent_name, env.observation_space_dimension(), env.action_space_dimension(), seed, env_name)
+        if steps_per_episode is not None:
+            total_timesteps = episodes * steps_per_episode
+        else:
+            total_timesteps = episodes
+        agent.learn(total_timesteps=total_timesteps)
+        
+        # --- Add Evaluation Loop for SB3 agents here ---
+        eval_shortfalls = []
+        for eval_ep in range(100):
+            state = env.reset(seed + eval_ep * 100) # Use different seed for evaluation
+            env.start_transactions()
+            done = False
+            while not done:
+                action = agent.act(state, add_noise=False)
+                state, reward, done, info = env.step(action, reward_function=reward_fn)
+            eval_shortfalls.append(info.implementation_shortfall)
+        
+        mean_s = np.mean(eval_shortfalls)
+        std_s = np.std(eval_shortfalls)
+        mean_r = 0 # Or compute some aggregated reward during evaluation if possible
+        std_r = 0
+        rewards = [mean_r] * episodes # Placeholder, or adapt logging
 
-    rewards, shortfalls = [], []
-
-    for ep in trange(episodes, desc=f"{agent_name}:{reward_fn}"):
-        state = env.reset(seed + ep)
-        env.start_transactions()
-        agent.reset()
-        tot_r = 0.0
-        done = False
-        while not done:
-            action = agent.act(state, add_noise=noiseflag)
-            next_state, reward, done, info = env.step(action, reward_function=reward_fn)
-            reward = np.nan_to_num(reward, nan=0.0, posinf=0.0, neginf=0.0)
-            r_scalar = reward.item()
-            agent.step(state, action, r_scalar, next_state, done)
-            tot_r += r_scalar
-            state = next_state
-        rewards.append(tot_r)
-        shortfalls.append(info.implementation_shortfall)
-        if (ep + 1) % 1000 == 0:
-            log.info("Ep %d/%d  R=%.3f  IS=$%s", ep + 1, episodes, tot_r,
-                     f"{info.implementation_shortfall:,.0f}")
+    else: 
+        agent = make_agent(agent_name, env.observation_space_dimension(), env.action_space_dimension(), seed, env_name)
+        rewards, shortfalls = [], []
+        for ep in trange(episodes, desc=f"{agent_name}:{reward_fn}"):
+            state = env.reset(seed + ep)
+            env.start_transactions()
+            agent.reset()
+            tot_r = 0.0
+            done = False
+            while not done:
+                action = agent.act(state, add_noise=noiseflag)
+                next_state, reward, done, info = env.step(action, reward_function=reward_fn)
+                reward = np.nan_to_num(reward, nan=0.0, posinf=0.0, neginf=0.0)
+                r_scalar = reward.item()
+                agent.step(state, action, r_scalar, next_state, done)
+                tot_r += r_scalar
+                state = next_state
+            rewards.append(tot_r)
+            shortfalls.append(info.implementation_shortfall)
+            if (ep + 1) % 1000 == 0:
+                log.info("Ep %d/%d  R=%.3f  IS=$%s", ep + 1, episodes, tot_r,
+                         f"{info.implementation_shortfall:,.0f}")
+        mean_r, std_r = np.mean(rewards), np.std(rewards)
+        mean_s, std_s = np.mean(shortfalls), np.std(shortfalls)
 
     # Save per‑episode CSV
     csv_dir.mkdir(parents=True, exist_ok=True)
-    pd.DataFrame({"episode": range(episodes), "reward": rewards, "shortfall": shortfalls}) \
-        .to_csv(csv_dir / f"{agent_name}_{reward_fn}.csv", index=False)
+    if agent_name in ["sac", "td3"]:
+        pd.DataFrame({"episode": range(len(eval_shortfalls)), "shortfall": eval_shortfalls}) \
+            .to_csv(csv_dir / f"{agent_name}_{reward_fn}_eval.csv", index=False)
+    else:
+        pd.DataFrame({"episode": range(episodes), "reward": rewards, "shortfall": shortfalls}) \
+            .to_csv(csv_dir / f"{agent_name}_{reward_fn}.csv", index=False)
 
-    return (np.mean(rewards), np.std(rewards), np.mean(shortfalls), np.std(shortfalls))
+    return (mean_r, std_r, mean_s, std_s)
 
 
 def main(argv: List[str] | None = None):
@@ -88,6 +125,7 @@ def main(argv: List[str] | None = None):
     p.add_argument("--csv-dir", default="runs", help="folder to dump CSVs")
     p.add_argument("--no-noise", action="store_true", help="turn off exploration noise")
     p.add_argument("--plot", action="store_true", help="plot summary bar + box plots if comparing")
+    p.add_argument("--steps-per-episode", type=int, default=None, help="Override: steps per episode for SB3 agents")
     args = p.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -112,6 +150,7 @@ def main(argv: List[str] | None = None):
             seed=args.seed,
             csv_dir=csv_dir,
             noiseflag=not args.no_noise,
+            steps_per_episode=args.steps_per_episode,
         )
         summary[r] = {
             "reward_mean": mean_r,

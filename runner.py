@@ -9,29 +9,40 @@ from tqdm import trange
 import seaborn as sns
 import matplotlib.pyplot as plt
 import inspect
+import gym
 
 from rewards import REWARD_FN_MAP
+
 from syntheticChrissAlmgren_extended import MarketEnvironment as AlmgrenChrisEnvironment
-from ddpg_agent import Agent
+from ddpg_agent import Agent as DDPGAgent
 from actions import transform_action, TRANSFORMS
 
+from sac import SB3SACAgent
 
-def make_env(env_name: str, seed: int, fee_config: dict = None):
-    """Create environment instance based on environment name."""
-    if env_name == "ac_default":
+
+def make_env(env_name: str, seed: int, fee_config: dict = None) -> gym.Env:
+    """
+    Creates an environment instance based on its name.
+    This function handles multiple environment types and fee configurations.
+    """
+    env_name_lower = env_name.lower()
+    if env_name_lower == "ac_default":
         return AlmgrenChrisEnvironment(randomSeed=seed)
-    elif env_name == "gbm":
-        from GBM import GBMMarketEnvironment
-        return GBMMarketEnvironment(randomSeed=seed)
-    elif env_name == "heston_merton":
-        from Hetson_Merton_Env import HestonMertonEnvironment
-        return HestonMertonEnvironment(randomSeed=seed, fee_config=fee_config)
-    elif env_name == "heston_merton_fees":
-        from Hetson_Merton_fees import HestonMertonFeesEnvironment
-        return HestonMertonFeesEnvironment(randomSeed=seed, fee_config=fee_config)
-    else:
-        # Dynamic import for custom environments
-        try:
+    
+
+    try:
+        if env_name_lower == "gbm":
+            from GBM import GBMMarketEnvironment
+            return GBMMarketEnvironment(randomSeed=seed)
+        elif env_name_lower == "heston_merton":
+            from Hetson_Merton_Env import HestonMertonEnvironment
+            return HestonMertonEnvironment(randomSeed=seed, fee_config=fee_config)
+        elif env_name_lower == "heston_merton_fees":
+            from Hetson_Merton_fees import HestonMertonFeesEnvironment
+            return HestonMertonFeesEnvironment(randomSeed=seed, fee_config=fee_config)
+        else:
+            # Fallback for custom 'module:ClassName' syntax
+            # Dynamic import for custom environments
             module_name, cls_name = env_name.split(":")
             mod = importlib.import_module(module_name)
             cls = getattr(mod, cls_name)
@@ -39,21 +50,31 @@ def make_env(env_name: str, seed: int, fee_config: dict = None):
                 return cls(randomSeed=seed, fee_config=fee_config)
             except TypeError:
                 return cls(randomSeed=seed)
-        except ValueError:
-            raise ValueError(f"Unknown env format '{env_name}'. Use 'ac_default', 'gbm', 'heston_merton', 'heston_merton_fees', or 'module:ClassName'.")
+    except (ImportError, ModuleNotFoundError, ValueError, AttributeError) as e:
+        raise ValueError(f"Could not create environment '{env_name}'. Error: {e}")      
 
 
-def make_agent(agent_name: str, state_dim: int, action_dim: int, seed: int):
-    if agent_name == "ddpg":
-        return Agent(state_size=state_dim, action_size=action_dim, random_seed=seed)
-    try:
-        module_name, cls_name = agent_name.split(":")
-        mod = importlib.import_module(module_name)
-        cls = getattr(mod, cls_name)
-        return cls(state_size=state_dim, action_size=action_dim, random_seed=seed)
-    except ValueError:
-        raise ValueError(
-            f"Unknown agent '{agent_name}'. Use 'ddpg' or 'module:ClassName'.")
+def make_agent(agent_name: str, env: gym.Env, seed: int, **kwargs):
+    """
+    Factory function to create DDPG or SAC agents.
+    It takes the 'env' object directly for compatibility and passes hyperparameters via kwargs.
+    """
+    # The environment must have valid observation and action spaces.
+    if not hasattr(env, 'observation_space') or not hasattr(env, 'action_space'):
+        raise TypeError("The provided environment is not a valid Gym environment.")
+
+    state_dim = env.observation_space.shape[0]
+    action_dim = env.action_space.shape[0]
+    agent_name_lower = agent_name.lower()
+
+    if agent_name_lower == "ddpg":
+        return DDPGAgent(state_size=state_dim, action_size=action_dim, random_seed=seed)
+    
+    elif agent_name_lower == "sac":
+        return SB3SACAgent(env=env, seed=seed, **kwargs)
+        
+    else:
+        raise ValueError(f"Unknown agent '{agent_name}'. Use 'ddpg' or 'sac'.")
 
 
 def supports_reward_function(env_step_method):
@@ -63,87 +84,88 @@ def supports_reward_function(env_step_method):
 
 
 def train_once(env_name: str, agent_name: str, reward_fn: str, act_method: str, episodes: int, seed: int,
-               csv_dir: Path, noiseflag: bool = True, fee_config: dict = None):
-    log = logging.getLogger(f"{agent_name}:{reward_fn}")
+               csv_dir: Path, noiseflag: bool = True, fee_config: dict = None, agent_kwargs: dict = None):
+    """
+    Main training and evaluation function with separate logic for DDPG and SAC.
+    """
+    log = logging.getLogger(f"{agent_name}|{reward_fn}|{act_method}")
+    if agent_kwargs is None:
+        agent_kwargs = {}
 
     env = make_env(env_name, seed, fee_config)
-    agent = make_agent(agent_name, env.observation_space_dimension(), env.action_space_dimension(), seed)
-
-    rewards, shortfalls = [], []
-    fee_data = []  # Track fee information when available
+    agent = make_agent(agent_name, env, seed, **agent_kwargs)
     
-    # Check if environment supports reward_function parameter
     step_supports_reward = supports_reward_function(env.step)
+    rewards, shortfalls, fee_data = [], [], []
 
-    for ep in trange(episodes, desc=f"{agent_name}:{reward_fn}"):
-        state = env.reset(seed + ep)
-        env.start_transactions()
-        agent.reset()
-        tot_r = 0.0
-        done = False
-        episode_fees = 0.0
-        
-        while not done:
-            raw_action = agent.act(state, add_noise=noiseflag)
-            action = transform_action(raw_action, act_method)
-            
-            # Call step method with appropriate parameters
-            if step_supports_reward:
-                next_state, reward, done, info = env.step(action, reward_function=reward_fn)
-            else:
-                next_state, reward, done, info = env.step(action)
-            
-            r_scalar = reward.item()
-            agent.step(state, action, r_scalar, next_state, done)
-            tot_r += r_scalar
-            state = next_state
-            
-            # Track fees if available
-            if hasattr(info, 'total_fees'):
-                episode_fees += info.total_fees
-                
-        rewards.append(tot_r)
-        shortfalls.append(info.implementation_shortfall)
-        fee_data.append(episode_fees)
-        
-        if (ep + 1) % 1000 == 0:
-            log.info("Ep %d/%d  R=%.3f  IS=$%s", ep + 1, episodes, tot_r,
-                     f"{info.implementation_shortfall:,.0f}")
+    if agent_name.lower() == "sac":
+        total_timesteps = episodes * env.num_n
+        log.info(f"Starting SAC training for {total_timesteps} timesteps...")
+        agent.learn(total_timesteps=total_timesteps)
+        log.info("SAC training finished.")
 
-    # Save per‑episode CSV with fee information
+        log.info(f"Starting SAC evaluation for {episodes} episodes...")
+        for ep in trange(episodes, desc=f"Evaluating {agent_name}"):
+            state = env.reset(seed=seed + ep)
+            env.start_transactions()
+            done, tot_r, episode_fees = False, 0.0, 0.0
+            while not done:
+                raw_action = agent.act(state, deterministic=True)
+                action = transform_action(raw_action, env, act_method)
+                step_args = (action, reward_fn) if step_supports_reward else (action,)
+                next_state, reward, done, info = env.step(*step_args)
+                tot_r += reward
+                state = next_state
+                if hasattr(info, 'total_fees'):
+                    episode_fees += info.total_fees
+            rewards.append(tot_r)
+            shortfalls.append(info.implementation_shortfall)
+            fee_data.append(episode_fees)
+    else:
+        log.info(f"Starting DDPG training for {episodes} episodes...")
+        for ep in trange(episodes, desc=f"Training {agent_name}"):
+            state = env.reset(seed=seed + ep)
+            env.start_transactions()
+            agent.reset()
+            done, tot_r, episode_fees = False, 0.0, 0.0
+            while not done:
+                raw_action = agent.act(state, add_noise=noiseflag)
+                action = transform_action(raw_action, env, act_method)
+                step_args = (action, reward_fn) if step_supports_reward else (action,)
+                next_state, reward, done, info = env.step(*step_args)
+                r_scalar = reward.item() if hasattr(reward, 'item') else reward
+                agent.step(state, action, r_scalar, next_state, done)
+                tot_r += r_scalar
+                state = next_state
+                if hasattr(info, 'total_fees'):
+                    episode_fees += info.total_fees
+            rewards.append(tot_r)
+            shortfalls.append(info.implementation_shortfall)
+            fee_data.append(episode_fees)
+
     csv_dir.mkdir(parents=True, exist_ok=True)
-    df_data = {
-        "episode": range(episodes), 
-        "reward": rewards, 
-        "shortfall": shortfalls
-    }
-    
-    # Add fee data if any episodes had fee information
+    df_data = {"episode": range(len(rewards)), "reward": rewards, "shortfall": shortfalls}
     if any(fee > 0 for fee in fee_data):
         df_data["total_fees"] = fee_data
-        
-    pd.DataFrame(df_data).to_csv(csv_dir / f"{agent_name}_{reward_fn}.csv", index=False)
-
+    file_tag = f"{agent_name}_{reward_fn}_{act_method}"
+    pd.DataFrame(df_data).to_csv(csv_dir / f"{file_tag}.csv", index=False)
     return (np.mean(rewards), np.std(rewards), np.mean(shortfalls), np.std(shortfalls))
 
 
-def run_action_transform_test(transform_methods: List[str], seed_count: int, output_dir: Path, env_name: str = "ac_default"):  
+def run_action_transform_test(transform_methods: List[str], seed_count: int, output_dir: Path, env_name: str = "ac_default"): 
     """Test action transformation methods with dynamic environment support."""
     results = {}
     for method in transform_methods:
         shortfalls = []
         for seed in range(seed_count):
             env = make_env(env_name, seed)
-            env.reset(seed=seed)
             env.start_transactions()
-            
-            # Use dynamic observation space dimension
-            agent = Agent(state_size=env.observation_space_dimension(), action_size=1, random_seed=seed)
-            state = env.initial_state
+            agent = DDPGAgent(state_size=env.observation_space.shape[0], action_size=1, random_seed=seed)
+            state = env.reset(seed=seed)
             done = False
-            
             while not done:
-                action = agent.act(state, add_noise=False, transform_method=method)  
+                raw_action = agent.act(state, add_noise=False)
+                action = transform_action(raw_action, env, method)
                 next_state, reward, done, info = env.step(action)
                 state = next_state
             shortfalls.append(getattr(info, "implementation_shortfall", np.nan))
@@ -151,11 +173,9 @@ def run_action_transform_test(transform_methods: List[str], seed_count: int, out
             'mean_shortfall': np.nanmean(shortfalls),
             'std_shortfall': np.nanstd(shortfalls),
         }
-
     output_dir.mkdir(parents=True, exist_ok=True)
     df = pd.DataFrame(results).T.reset_index().rename(columns={"index": "method"})
     df.to_csv(output_dir / "action_transform_results.csv", index=False)
-
     plt.figure(figsize=(10, 5))
     plt.bar(df['method'], df['mean_shortfall'], yerr=df['std_shortfall'], capsize=5, color='skyblue')
     plt.title("Comparison of Action Transformation Methods")
@@ -199,18 +219,9 @@ def main(argv: List[str] | None = None):
                         format="%(asctime)s [%(levelname)s] %(message)s")
 
     csv_dir = Path(args.csv_dir)
-    
-    # Configure fees
-    fee_config = {
-        "fixed": args.fee_fixed,
-        "prop": args.fee_prop
-    }
 
-    # Run action transformation test if requested
-    if args.run_action_test:
-        run_action_transform_test(args.transform_methods, args.test_seeds, csv_dir, args.env)
-        return
-
+    # Determine which agents, rewards, and actions to run
+    agents_to_run = ['ddpg', 'sac'] if args.agent.lower() == 'all' else [args.agent]
     # ------------------------------------------------------------------
     # Build reward and action batches
     # ------------------------------------------------------------------
@@ -231,38 +242,70 @@ def main(argv: List[str] | None = None):
         action_batch = args.action
     # ------------------------------------------------------------------
 
+    
+    # Run action transformation test if requested
+    if args.run_action_test:
+        run_action_transform_test(args.transform_methods, args.test_seeds, csv_dir, args.env)
+        return
+
+    
+    # Configure fees
+    fee_config = {
+        "fixed": args.fee_fixed,
+        "prop": args.fee_prop
+    }
+
     summary: dict[str, dict[str, float]] = {}
 
-    for r in reward_batch:
-        for a in action_batch:
-            tag = f"{r}|{a}"
-            m_r, s_r, m_s, s_s = train_once(
-                env_name=args.env,
-                agent_name=args.agent,
-                reward_fn=r,
-                act_method=a,
-                episodes=args.episodes,
-                seed=args.seed,
-                csv_dir=csv_dir,
-                noiseflag=not args.no_noise,
-                fee_config=fee_config,
-            )
-            summary[tag] = {
-                "reward_mean":      m_r,
-                "reward_std":       s_r,
-                "shortfall_mean":   m_s,
-                "shortfall_std":    s_s,
-                "Reward":           r,
-                "Action":           a,
-            }
-            logging.info("[DONE] %-25s  IS_mean=$%s", tag, f"{m_s:,.0f}")
+    for agent_to_run in agents_to_run:
+        for r in reward_batch:
+            for a in action_batch:
+                tag = f"{agent_to_run}|{r}|{a}"
+                logging.info(f"----- Running experiment for: {tag} -----")
+
+                agent_kwargs = {}
+                if agent_to_run == "sac":
+                    agent_kwargs["policy_kwargs"] = dict(net_arch=[256, 256])
+                    agent_kwargs["learning_rate"] = 0.0003
+                    # more SAC parameters here if needed
+
+                m_r, s_r, m_s, s_s = train_once(
+                    env_name=args.env,
+                    agent_name=agent_to_run,
+                    reward_fn=r,
+                    act_method=a,
+                    episodes=args.episodes,
+                    seed=args.seed,
+                    csv_dir=csv_dir,
+                    noiseflag=not args.no_noise,
+                    fee_config=fee_config,
+                    agent_kwargs=agent_kwargs
+                )
+                summary[tag] = {
+                    "agent": agent_to_run,
+                    "reward_fn": r,
+                    "action_fn": a,
+                    "reward_mean": m_r,
+                    "reward_std": s_r,
+                    "shortfall_mean": m_s,
+                    "shortfall_std": s_s,
+                }
+                logging.info("[DONE] %-35s | Avg Shortfall: $%s", tag, f"{m_s:,.0f}")
+
+    if not summary:
+        logging.warning("No experiments were run. Exiting.")
+        return
 
     # ------------------------------------------------------------
     # Save summary CSV (tidy format)
     # ------------------------------------------------------------
     df_all = pd.DataFrame(summary).T.reset_index()
-    df_all[["Reward", "Action"]] = df_all["index"].str.split("|", expand=True)
-    df_all.drop(columns=["index"], inplace=True)
+    df_all.rename(columns={
+    "agent": "Agent",
+    "reward_fn": "Reward",
+    "action_fn": "Action"}, inplace=True)
+    
+    df_all = df_all[["Agent", "Reward", "Action", "reward_mean", "reward_std", "shortfall_mean", "shortfall_std"]]
 
     # Reorder columns
     cols = ["Reward", "Action", "reward_mean", "reward_std", "shortfall_mean", "shortfall_std"]
@@ -275,25 +318,23 @@ def main(argv: List[str] | None = None):
     # Optional plotting
     # ------------------------------------------------------------
     if args.plot:
-        # Plot by reward (if >1 reward)
         if df_all["Reward"].nunique() > 1:
             plt.figure(figsize=(10, 6))
-            sns.barplot(data=df_all, x="Reward", y="shortfall_mean",
-                        palette="viridis", errorbar="sd")
+            sns.barplot(data=df_all, x="Reward", y="shortfall_mean", hue="Agent",
+                        palette="viridis", errorbar="sd", dodge=True)
             plt.ylabel("Avg Implementation Shortfall ($)")
+            plt.title("Shortfall by Reward Function")
             plt.xticks(rotation=45)
-            plt.title(f"Shortfall by Reward  (Action = {df_all['Action'].iloc[0]})")
             plt.tight_layout()
             plt.savefig(csv_dir / "shortfall_by_reward.png")
             plt.close()
 
-        # Plot by action (if >1 action)
         if df_all["Action"].nunique() > 1:
             plt.figure(figsize=(max(10, 0.9 * df_all['Action'].nunique()), 6))
-            sns.barplot(data=df_all, x="Action", y="shortfall_mean",
-                        palette="magma", errorbar="sd")
+            sns.barplot(data=df_all, x="Action", y="shortfall_mean", hue="Agent",
+                        palette="magma", errorbar="sd", dodge=True)
             plt.ylabel("Avg Implementation Shortfall ($)")
-            plt.title(f"Shortfall by Action  (Reward = {df_all['Reward'].iloc[0]})")
+            plt.title("Shortfall by Action Transform")
             plt.xticks(rotation=45, ha="right")
             plt.tight_layout()
             plt.savefig(csv_dir / "shortfall_by_action.png")

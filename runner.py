@@ -8,25 +8,39 @@ import pandas as pd
 from tqdm import trange
 import seaborn as sns
 import matplotlib.pyplot as plt
-
+import inspect
 
 from rewards import REWARD_FN_MAP
-from syntheticChrissAlmgren_extended import MarketEnvironment
+from syntheticChrissAlmgren_extended import MarketEnvironment as AlmgrenChrisEnvironment
 from ddpg_agent import Agent
 from actions import transform_action, TRANSFORMS
 
 
-def make_env(env_name: str, seed: int) -> MarketEnvironment:
+def make_env(env_name: str, seed: int, fee_config: dict = None):
+    """Create environment instance based on environment name."""
     if env_name == "ac_default":
-        return MarketEnvironment(randomSeed=seed)
-    # Dynamically import alternative envs if needed, e.g. gbm_env.GBMMarketEnvironment
-    try:
-        module_name, cls_name = env_name.split(":")
-        mod = importlib.import_module(module_name)
-        cls = getattr(mod, cls_name)
-        return cls(randomSeed=seed)
-    except ValueError:
-        raise ValueError(f"Unknown env format '{env_name}'. Use 'ac_default' or 'module:ClassName'.")
+        return AlmgrenChrisEnvironment(randomSeed=seed)
+    elif env_name == "gbm":
+        from GBM import GBMMarketEnvironment
+        return GBMMarketEnvironment(randomSeed=seed)
+    elif env_name == "heston_merton":
+        from Hetson_Merton_Env import HestonMertonEnvironment
+        return HestonMertonEnvironment(randomSeed=seed, fee_config=fee_config)
+    elif env_name == "heston_merton_fees":
+        from Hetson_Merton_fees import HestonMertonFeesEnvironment
+        return HestonMertonFeesEnvironment(randomSeed=seed, fee_config=fee_config)
+    else:
+        # Dynamic import for custom environments
+        try:
+            module_name, cls_name = env_name.split(":")
+            mod = importlib.import_module(module_name)
+            cls = getattr(mod, cls_name)
+            try:
+                return cls(randomSeed=seed, fee_config=fee_config)
+            except TypeError:
+                return cls(randomSeed=seed)
+        except ValueError:
+            raise ValueError(f"Unknown env format '{env_name}'. Use 'ac_default', 'gbm', 'heston_merton', 'heston_merton_fees', or 'module:ClassName'.")
 
 
 def make_agent(agent_name: str, state_dim: int, action_dim: int, seed: int):
@@ -42,14 +56,24 @@ def make_agent(agent_name: str, state_dim: int, action_dim: int, seed: int):
             f"Unknown agent '{agent_name}'. Use 'ddpg' or 'module:ClassName'.")
 
 
+def supports_reward_function(env_step_method):
+    """Check if environment's step method supports reward_function parameter."""
+    sig = inspect.signature(env_step_method)
+    return 'reward_function' in sig.parameters
+
+
 def train_once(env_name: str, agent_name: str, reward_fn: str, act_method: str, episodes: int, seed: int,
-               csv_dir: Path, noiseflag: bool = True):
+               csv_dir: Path, noiseflag: bool = True, fee_config: dict = None):
     log = logging.getLogger(f"{agent_name}:{reward_fn}")
 
-    env = make_env(env_name, seed)
+    env = make_env(env_name, seed, fee_config)
     agent = make_agent(agent_name, env.observation_space_dimension(), env.action_space_dimension(), seed)
 
     rewards, shortfalls = [], []
+    fee_data = []  # Track fee information when available
+    
+    # Check if environment supports reward_function parameter
+    step_supports_reward = supports_reward_function(env.step)
 
     for ep in trange(episodes, desc=f"{agent_name}:{reward_fn}"):
         state = env.reset(seed + ep)
@@ -57,38 +81,67 @@ def train_once(env_name: str, agent_name: str, reward_fn: str, act_method: str, 
         agent.reset()
         tot_r = 0.0
         done = False
+        episode_fees = 0.0
+        
         while not done:
             raw_action = agent.act(state, add_noise=noiseflag)
             action = transform_action(raw_action, act_method)
-            next_state, reward, done, info = env.step(action, reward_function=reward_fn)
+            
+            # Call step method with appropriate parameters
+            if step_supports_reward:
+                next_state, reward, done, info = env.step(action, reward_function=reward_fn)
+            else:
+                next_state, reward, done, info = env.step(action)
+            
             r_scalar = reward.item()
             agent.step(state, action, r_scalar, next_state, done)
             tot_r += r_scalar
             state = next_state
+            
+            # Track fees if available
+            if hasattr(info, 'total_fees'):
+                episode_fees += info.total_fees
+                
         rewards.append(tot_r)
         shortfalls.append(info.implementation_shortfall)
+        fee_data.append(episode_fees)
+        
         if (ep + 1) % 1000 == 0:
             log.info("Ep %d/%d  R=%.3f  IS=$%s", ep + 1, episodes, tot_r,
                      f"{info.implementation_shortfall:,.0f}")
 
-    # Save per‑episode CSV
+    # Save per‑episode CSV with fee information
     csv_dir.mkdir(parents=True, exist_ok=True)
-    pd.DataFrame({"episode": range(episodes), "reward": rewards, "shortfall": shortfalls}) \
-        .to_csv(csv_dir / f"{agent_name}_{reward_fn}.csv", index=False)
+    df_data = {
+        "episode": range(episodes), 
+        "reward": rewards, 
+        "shortfall": shortfalls
+    }
+    
+    # Add fee data if any episodes had fee information
+    if any(fee > 0 for fee in fee_data):
+        df_data["total_fees"] = fee_data
+        
+    pd.DataFrame(df_data).to_csv(csv_dir / f"{agent_name}_{reward_fn}.csv", index=False)
 
     return (np.mean(rewards), np.std(rewards), np.mean(shortfalls), np.std(shortfalls))
 
-def run_action_transform_test(transform_methods: List[str], seed_count: int, output_dir: Path):  
+
+def run_action_transform_test(transform_methods: List[str], seed_count: int, output_dir: Path, env_name: str = "ac_default"):  
+    """Test action transformation methods with dynamic environment support."""
     results = {}
     for method in transform_methods:
         shortfalls = []
         for seed in range(seed_count):
-            env = MarketEnvironment(randomSeed=seed)
+            env = make_env(env_name, seed)
             env.reset(seed=seed)
             env.start_transactions()
-            agent = Agent(state_size=8, action_size=1, random_seed=seed)
+            
+            # Use dynamic observation space dimension
+            agent = Agent(state_size=env.observation_space_dimension(), action_size=1, random_seed=seed)
             state = env.initial_state
             done = False
+            
             while not done:
                 action = agent.act(state, add_noise=False, transform_method=method)  
                 next_state, reward, done, info = env.step(action)
@@ -113,10 +166,12 @@ def run_action_transform_test(transform_methods: List[str], seed_count: int, out
     plt.savefig(output_dir / "action_transform_plot.png")
     plt.close()
 
+
 def main(argv: List[str] | None = None):
     p = argparse.ArgumentParser("runner")
     p.add_argument("--agent", default="ddpg", help="agent name or module:Class")
-    p.add_argument("--env",   default="ac_default", help="env name or module:Class")
+    p.add_argument("--env", default="ac_default", 
+                   help="Environment: 'ac_default', 'gbm', 'heston_merton', 'heston_merton_fees', or 'module:Class'")
     p.add_argument("--reward", nargs="+", default=["ac_utility"], help="rewards for single‑run mode")
     p.add_argument("--compare-reward", nargs="*", help="Batch-compare reward functions (use 'all' for every reward)")
     p.add_argument("--episodes", type=int, default=10000)
@@ -129,7 +184,14 @@ def main(argv: List[str] | None = None):
                help="Action transform(s) for single-run mode")
     p.add_argument("--compare-action", nargs="*",
                 help="Batch compare action transforms (use 'all' for every method)")
-
+    
+    # Fee configuration arguments
+    p.add_argument("--fee-fixed", type=float, default=10.0, help="Fixed fee per trade")
+    p.add_argument("--fee-prop", type=float, default=0.001, help="Proportional fee rate")
+    
+    # Action transform test arguments
+    p.add_argument("--run-action-test", action="store_true", help="Run action transformation test")
+    p.add_argument("--test-seeds", type=int, default=10, help="Number of seeds for action transform test")
 
     args = p.parse_args(argv)
 
@@ -137,6 +199,17 @@ def main(argv: List[str] | None = None):
                         format="%(asctime)s [%(levelname)s] %(message)s")
 
     csv_dir = Path(args.csv_dir)
+    
+    # Configure fees
+    fee_config = {
+        "fixed": args.fee_fixed,
+        "prop": args.fee_prop
+    }
+
+    # Run action transformation test if requested
+    if args.run_action_test:
+        run_action_transform_test(args.transform_methods, args.test_seeds, csv_dir, args.env)
+        return
 
     # ------------------------------------------------------------------
     # Build reward and action batches
@@ -172,6 +245,7 @@ def main(argv: List[str] | None = None):
                 seed=args.seed,
                 csv_dir=csv_dir,
                 noiseflag=not args.no_noise,
+                fee_config=fee_config,
             )
             summary[tag] = {
                 "reward_mean":      m_r,
@@ -224,7 +298,6 @@ def main(argv: List[str] | None = None):
             plt.tight_layout()
             plt.savefig(csv_dir / "shortfall_by_action.png")
             plt.close()
-
 
 
 if __name__ == "__main__":

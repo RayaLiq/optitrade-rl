@@ -51,7 +51,7 @@ MERTON_SIGMA_J = 0.1      # Jump size volatility
 
 # Simulation Environment
 
-class MarketEnvironment():
+class HestonMertonEnvironment():
     
     def __init__(self, randomSeed=0,
              lqd_time=LIQUIDATION_TIME,

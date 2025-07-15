@@ -52,7 +52,7 @@ PROPORTIONAL_FEE_RATE = 0.001   # 0.1% fee on trade value
 
 # Simulation Environment
 
-class MarketEnvironment():
+class HestonMertonFeesEnvironment():
     
     def __init__(self, randomSeed = 0,
                  lqd_time = LIQUIDATION_TIME,

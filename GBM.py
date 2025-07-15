@@ -38,7 +38,7 @@ EXPECTED_RETURN = RISK_FREE_RATE + BETA * (MARKET_RETURN - RISK_FREE_RATE)
 
 # Simulation Environment
 
-class MarketEnvironment():
+class GBMMarketEnvironment():
     
     def __init__(self, randomSeed = 0,
                  lqd_time = LIQUIDATION_TIME,

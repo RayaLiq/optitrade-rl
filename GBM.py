@@ -89,6 +89,10 @@ class GBMMarketEnvironment():
 
         # Set the initial transaction state to False
         self.transacting = False
+
+        # Set VWAP reward function variables             
+        self.cumulative_volume = 0
+        self.vwap_numerator = 0                                         
         
         # Set a variable to keep trak of the trade number
         self.k = 0

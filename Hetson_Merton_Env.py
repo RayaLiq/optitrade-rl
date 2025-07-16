@@ -1,3 +1,4 @@
+from logging import info
 import random
 import numpy as np
 import collections
@@ -35,15 +36,29 @@ DELTA_T = 1 / TRAD_DAYS  # Time step in years
 EXPECTED_RETURN = RISK_FREE_RATE + BETA * (MARKET_RETURN - RISK_FREE_RATE)
 
 
+# --------------- Heston & Merton Parameters ---------------- #
+HESTON_KAPPA = 3.0        # Volatility mean-reversion speed
+HESTON_THETA = 0.12**2    # Long-term variance (0.12^2)
+HESTON_SIGMA_V = 0.1      # Volatility of volatility
+HESTON_RHO = -0.7         # Price/vol correlation
+HESTON_V0 = 0.12**2       # Initial variance
+
+MERTON_LAMBDA = 0.5       # Jump intensity (jumps/year)
+MERTON_MU_J = -0.05       # Mean jump size (log)
+MERTON_SIGMA_J = 0.1      # Jump size volatility
+
+
 
 # Simulation Environment
 
-class GBMMarketEnvironment():
+class HestonMertonEnvironment():
     
-    def __init__(self, randomSeed = 0,
-                 lqd_time = LIQUIDATION_TIME,
-                 num_tr = NUM_N,
-                 lambd = LLAMBDA):
+    def __init__(self, randomSeed=0,
+             lqd_time=LIQUIDATION_TIME,
+             num_tr=NUM_N,
+             lambd=LLAMBDA,
+             fee_config=None):
+
         
         # Set the random seed
         random.seed(randomSeed)
@@ -64,9 +79,6 @@ class GBMMarketEnvironment():
         self.singleStepVariance = SINGLE_STEP_VARIANCE
         self.eta = ETA
         self.gamma = GAMMA
-
-        self.cumulative_volume = 0
-        self.vwap_numerator = 0
 
         # Initialize the GBM parameters
         self.delta_t = DELTA_T
@@ -92,16 +104,41 @@ class GBMMarketEnvironment():
         
         # Set a variable to keep trak of the trade number
         self.k = 0
+
+        # Initialize Heston parameters
+        self.heston_kappa = HESTON_KAPPA
+        self.heston_theta = HESTON_THETA
+        self.heston_sigma_v = HESTON_SIGMA_V
+        self.heston_rho = HESTON_RHO
+        self.current_variance = HESTON_V0  # Track current variance
+
+        # Initialize Merton parameters
+        self.jump_lambda = MERTON_LAMBDA
+        self.jump_mu = MERTON_MU_J
+        self.jump_sigma = MERTON_SIGMA_J
+
+        self.current_variance = HESTON_V0  # Reset variance
+        if fee_config is None:
+            fee_config = {}
+
+        self.fee_fixed = fee_config.get("fixed", 10.0)
+        self.fee_prop = fee_config.get("prop", 0.001)
+
         
         
     def reset(self, seed = 0, liquid_time = LIQUIDATION_TIME, num_trades = NUM_N, lamb = LLAMBDA):
+        
         
         # Initialize the environment with the given parameters
         self.__init__(randomSeed = seed, lqd_time = liquid_time, num_tr = num_trades, lambd = lamb)
         
         # Set the initial state to [0,0,0,0,0,0,1,1]
-        self.initial_state = np.array(list(self.logReturns) + [self.timeHorizon / self.num_n, \
-                                                               self.shares_remaining / self.total_shares])
+
+        self.initial_state = np.array(list(self.logReturns) + [self.timeHorizon / self.num_n, self.shares_remaining / self.total_shares, 
+                                                               np.log(self.current_variance) if self.current_variance > 0 else -10,  # Log variance 
+                                                               1 if (self.jump_lambda > 0 and random.random() < 0.05) else 0  # Jump indicator 
+                                                               ])
+
         return self.initial_state
 
     
@@ -147,25 +184,52 @@ class GBMMarketEnvironment():
             self.transacting = False
             info.done = True
             info.implementation_shortfall = self.total_shares * self.startingPrice - self.totalCapture
+
+            info.total_fixed_fees = self.fee_fixed * (self.num_n - self.timeHorizon)
+            gross_trade_value = self.total_shares * self.startingPrice
+            info.total_proportional_fees = self.fee_prop * (gross_trade_value - self.totalCapture)
+            info.total_fees = info.total_fixed_fees + info.total_proportional_fees
+
             info.expected_shortfall = self.get_expected_shortfall(self.total_shares)
+
             info.expected_variance = self.singleStepVariance * self.tau * self.totalSRSQ
             info.utility = info.expected_shortfall + self.llambda * info.expected_variance
             
         # We don't add noise before the first trade    
         if self.k == 0:
             info.price = self.prevImpactedPrice
+
         else:
-            # Calculate the current stock price using arithmetic brownian motion
-            info.price = self.prevImpactedPrice + np.sqrt(self.singleStepVariance * self.tau) * random.normalvariate(0, 1)
-      
-        #if self.k == 0:
-            #info.price = self.prevImpactedPrice
-        #else:
-            #epsilon = random.normalvariate(0, 1)
-            #drift = (self.mu - 0.5 * self.sigma ** 2) * self.delta_t
-            #diffusion = self.sigma * np.sqrt(self.delta_t) * epsilon
-            #info.price = self.prevImpactedPrice * np.exp(drift + diffusion)
-      
+            # Convert time step to years
+            tau_in_years = self.tau / TRAD_DAYS
+    
+            # 1. Generate correlated Brownian motions
+            Z1 = random.normalvariate(0, 1)
+            Z2 = random.normalvariate(0, 1)
+            dW1 = Z1 * np.sqrt(tau_in_years)
+            dW2 = self.heston_rho * dW1 + np.sqrt(1 - self.heston_rho**2) * Z2 * np.sqrt(tau_in_years)
+    
+            # 2. Update Heston variance (with full truncation scheme)
+            v_old = self.current_variance
+            v_plus = max(v_old, 0)  # Ensure non-negative
+            v_new = v_old + self.heston_kappa * (self.heston_theta - v_plus) * tau_in_years + \
+                 self.heston_sigma_v * np.sqrt(v_plus) * dW2
+            self.current_variance = max(v_new, 0)  # Truncate at 0
+    
+            # 3. Calculate log return from Heston model
+            log_return = (self.mu - 0.5 * v_plus) * tau_in_years + np.sqrt(v_plus) * dW1
+    
+            # 4. Add Merton jumps
+            if self.jump_lambda > 0:
+                jump_prob = 1 - np.exp(-self.jump_lambda * tau_in_years)
+                if random.random() < jump_prob:
+                    jump_size = np.exp(self.jump_mu + self.jump_sigma * random.normalvariate(0, 1))
+                    log_return += np.log(jump_size)
+    
+            # 5. Compute new fundamental price
+            fundamental_price = self.prevImpactedPrice * np.exp(log_return)
+            info.price = fundamental_price
+
         # If we are transacting, the stock price is affected by the number of shares we sell. The price evolves 
         # according to the Almgren and Chriss price dynamics model. 
         if self.transacting:
@@ -176,7 +240,7 @@ class GBMMarketEnvironment():
 
             # Convert the action to the number of shares to sell in the current step
             sharesToSellNow = self.shares_remaining * action
-#             sharesToSellNow = min(self.shares_remaining * action, self.shares_remaining)
+            #sharesToSellNow = min(self.shares_remaining * action, self.shares_remaining)
     
             if self.timeHorizon < 2:
                 sharesToSellNow = self.shares_remaining
@@ -211,10 +275,12 @@ class GBMMarketEnvironment():
             self.prevImpactedPrice = info.price - info.currentPermanentImpact
             
 
-            # Incorporate market trend direction
-            market_return = np.mean(list(self.logReturns))
-            trend_alignment = 1 if market_return < 0 else -1  # Sell faster in downturns
-            reward = trend_alignment * info.share_to_sell_now / self.total_shares
+
+            # Calculate incremental implementation shortfall improvement
+            current_value = self.shares_remaining * self.startingPrice
+            new_value = self.shares_remaining * info.price
+            reward = (current_value - new_value) / self.startingPrice
+
 
         else:
             reward = 0.0
@@ -222,7 +288,11 @@ class GBMMarketEnvironment():
         self.k += 1
             
         # Set the new state
-        state = np.array(list(self.logReturns) + [self.timeHorizon / self.num_n, self.shares_remaining / self.total_shares])
+        # Replace existing state with:
+        state = np.array(list(self.logReturns) + [self.timeHorizon / self.num_n, self.shares_remaining / self.total_shares,
+                                                  np.log(self.current_variance) if self.current_variance > 0 else -10,
+                                                  1 if (self.jump_lambda > 0 and random.random() < 0.05) else 0
+                                                  ])
 
         return (state, np.array([reward]), info.done, info)
 
@@ -243,19 +313,35 @@ class GBMMarketEnvironment():
         ft = 0.5 * self.gamma * (sharesToSell ** 2)        
         st = self.epsilon * sharesToSell
         tt = (self.eta_hat / self.tau) * self.totalSSSQ
-        return ft + st + tt
 
-    
+        # Add expected fees (fixed fee per trade + proportional fee)
+        expected_trades = self.num_n
+        expected_fixed_fees = self.fee_fixed * expected_trades
+        expected_prop_fees = self.fee_prop * (sharesToSell * self.startingPrice)
+
+        return ft + st + tt + expected_fixed_fees + expected_prop_fees
+
     def get_AC_expected_shortfall(self, sharesToSell):
         # Calculate the expected shortfall for the optimal strategy according to equation (20) of the AC paper
         ft = 0.5 * self.gamma * (sharesToSell ** 2)        
         st = self.epsilon * sharesToSell        
-        tt = self.eta_hat * (sharesToSell ** 2)       
-        nft = np.tanh(0.5 * self.kappa * self.tau) * (self.tau * np.sinh(2 * self.kappa * self.liquidation_time) \
-                                                      + 2 * self.liquidation_time * np.sinh(self.kappa * self.tau))       
-        dft = 2 * (self.tau ** 2) * (np.sinh(self.kappa * self.liquidation_time) ** 2)   
-        fot = nft / dft       
-        return ft + st + (tt * fot)  
+        tt = self.eta_hat * (sharesToSell ** 2)
+
+        nft = np.tanh(0.5 * self.kappa * self.tau) * (
+            self.tau * np.sinh(2 * self.kappa * self.liquidation_time)
+            + 2 * self.liquidation_time * np.sinh(self.kappa * self.tau)
+        )
+        dft = 2 * (self.tau ** 2) * (np.sinh(self.kappa * self.liquidation_time) ** 2)
+        fot = nft / dft
+        ac_shortfall = ft + st + (tt * fot)
+
+        # Add expected fees
+        expected_trades = self.num_n
+        expected_fixed_fees = self.fee_fixed * expected_trades
+        expected_prop_fees = self.fee_prop * (sharesToSell * self.startingPrice)
+
+        return ac_shortfall + expected_fixed_fees + expected_prop_fees
+ 
         
     
     def get_AC_variance(self, sharesToSell):
@@ -291,8 +377,8 @@ class GBMMarketEnvironment():
      
         
     def observation_space_dimension(self):
-        # Return the dimension of the state
-        return 8
+
+        return 10  # Was previously 8
     
     
     def action_space_dimension(self):

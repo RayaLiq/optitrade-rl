@@ -1,303 +1,256 @@
+# td3.py
 import numpy as np
 import random
-import copy
-from collections import namedtuple, deque
-from actions import transform_action
-
-import torch
-import torch.nn.functional as F
-import torch.optim as optim
 from stable_baselines3 import TD3
+from stable_baselines3.common.env_util import make_vec_env
 from stable_baselines3.common.noise import NormalActionNoise
-from stable_baselines3.common.buffers import ReplayBuffer as SB3ReplayBuffer
+from actions import transform_action
+import gym
+import torch
 
-BUFFER_SIZE = int(1e4)  # replay buffer size
-BATCH_SIZE = 128        # minibatch size
-GAMMA = 0.99            # discount factor
-TAU = 5e-3              # for soft update of target parameters (TD3 uses 5e-3)
-LR_ACTOR = 1e-4         # learning rate of the actor 
-LR_CRITIC = 1e-3        # learning rate of the critic
-WEIGHT_DECAY = 0        # L2 weight decay
-POLICY_DELAY = 2        # TD3 policy update delay
-TARGET_NOISE = 0.2      # TD3 target policy smoothing noise
-NOISE_CLIP = 0.5        # TD3 target policy smoothing noise clip
 
-device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-
-class TD3Agent():
-    """TD3 Agent that interacts with and learns from the environment using Twin Delayed Deep Deterministic Policy Gradients."""
+class TD3Agent:
+    """
+    A TD3 (Twin Delayed Deep Deterministic Policy Gradient) agent using Stable-Baselines3.
     
-    def __init__(self, state_size, action_size, random_seed, env=None):
-        """Initialize a TD3Agent object.
-        
-        Params
-        ======
-            state_size (int): dimension of each state
-            action_size (int): dimension of each action
-            random_seed (int): random seed
-            env: gym environment (optional, for stable_baselines3)
-        """
+    This implementation follows the same interface as the existing DDPG agent while
+    leveraging the improvements of TD3 including:
+    - Twin critic networks to reduce overestimation bias
+    - Delayed policy updates
+    - Target policy smoothing
+    
+    :param state_size: Dimension of each state
+    :param action_size: Dimension of each action  
+    :param random_seed: Random seed for reproducibility
+    :param policy_kwargs: Dictionary of arguments for the policy network
+    :param kwargs: Other hyperparameters for TD3 such as learning_rate, buffer_size, etc.
+    """
+    
+    def __init__(self, state_size, action_size, random_seed, env=None, policy_kwargs=None, **kwargs):
+        """Initialize TD3 Agent with same interface as DDPG agent."""
         self.state_size = state_size
         self.action_size = action_size
-        self.seed = random.seed(random_seed)
+        self.random_seed = random_seed
+        self.env = env
         
-        # If environment is provided, use stable_baselines3 TD3
+        # Default TD3 hyperparameters (using your project's values where applicable)
+        default_kwargs = {
+            'learning_rate': 1e-4,  # Match your LR_ACTOR
+            'buffer_size': int(1e4),  # Match your BUFFER_SIZE
+            'batch_size': 128,        # Match your BATCH_SIZE
+            'gamma': 0.99,            # Match your GAMMA
+            'tau': 1e-3,              # Match your TAU (TD3 typically uses 5e-3, but keeping yours)
+            'policy_delay': 2,        # TD3 specific: delay policy updates
+            'target_policy_noise': 0.2,  # TD3 specific: target policy smoothing
+            'target_noise_clip': 0.5,    # TD3 specific: noise clipping
+            'learning_starts': 128,      # Start learning when batch_size samples available
+            'train_freq': 1,
+            'gradient_steps': 1,
+            'verbose': 0,
+            'device': torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+        }
+        
+        # Update with any provided kwargs
+        default_kwargs.update(kwargs)
+        
+        # Default policy network architecture
+        if policy_kwargs is None:
+            policy_kwargs = dict(net_arch=[24, 48])
+        
+        # Initialize noise for exploration (similar to DDPG's OUNoise)
+        self.action_noise = NormalActionNoise(
+            mean=np.zeros(action_size), 
+            sigma=0.1 * np.ones(action_size)
+        )
+        
+        # If environment is provided, create vectorized environment
         if env is not None:
-            self.use_sb3 = True
-            # Action noise for exploration
-            action_noise = NormalActionNoise(mean=np.zeros(action_size), sigma=0.1 * np.ones(action_size))
+            # Check if it's a gym environment or custom environment
+            if hasattr(env, 'observation_space') and hasattr(env, 'action_space'):
+                # Standard gym environment
+                self.vec_env = make_vec_env(lambda: env, n_envs=1)
+            else:
+                # Custom environment - create a gym wrapper
+                wrapped_env = self._wrap_custom_env(env)
+                self.vec_env = make_vec_env(lambda: wrapped_env, n_envs=1)
             
-            # Initialize stable_baselines3 TD3 model
+            # Initialize TD3 model
             self.model = TD3(
-                "MlpPolicy",
-                env,
-                action_noise=action_noise,
-                learning_rate=LR_ACTOR,
-                buffer_size=BUFFER_SIZE,
-                learning_starts=BATCH_SIZE,
-                batch_size=BATCH_SIZE,
-                tau=TAU,
-                gamma=GAMMA,
-                train_freq=1,
-                policy_delay=POLICY_DELAY,
-                target_policy_noise=TARGET_NOISE,
-                target_noise_clip=NOISE_CLIP,
-                verbose=1,
+                policy='MlpPolicy',
+                env=self.vec_env,
+                action_noise=self.action_noise,
+                policy_kwargs=policy_kwargs,
                 seed=random_seed,
-                device=device
+                **default_kwargs
             )
         else:
-            self.use_sb3 = False
-            # Custom TD3 implementation
-            from model import Actor, Critic
+            self.vec_env = None
+            self.model = None
             
-            # Actor Networks (w/ Target Networks)
-            self.actor_local = Actor(state_size, action_size, random_seed).to(device)
-            self.actor_target = Actor(state_size, action_size, random_seed).to(device)
-            self.actor_optimizer = optim.Adam(self.actor_local.parameters(), lr=LR_ACTOR)
-
-            # Twin Critic Networks (w/ Target Networks) - TD3 uses two critics
-            self.critic_local_1 = Critic(state_size, action_size, random_seed).to(device)
-            self.critic_target_1 = Critic(state_size, action_size, random_seed).to(device)
-            self.critic_optimizer_1 = optim.Adam(self.critic_local_1.parameters(), lr=LR_CRITIC, weight_decay=WEIGHT_DECAY)
+        # Store hyperparameters for potential manual learning
+        self.hyperparams = default_kwargs
+        self.policy_kwargs = policy_kwargs
+    
+    def _wrap_custom_env(self, env):
+        """Create a gym-compatible wrapper for custom environments."""
+        
+        class CustomEnvWrapper(gym.Env):
+            def __init__(self, custom_env):
+                super().__init__()
+                self.custom_env = custom_env
+                
+                # Create gym-compatible spaces
+                obs_dim = custom_env.observation_space_dimension()
+                act_dim = custom_env.action_space_dimension()
+                
+                self.observation_space = gym.spaces.Box(
+                    low=-np.inf, high=np.inf, shape=(obs_dim,), dtype=np.float32
+                )
+                self.action_space = gym.spaces.Box(
+                    low=-1, high=1, shape=(act_dim,), dtype=np.float32
+                )
+                
+                # Forward relevant attributes
+                for attr in ['dtv', 'shares_remaining', 'kappa', 'timeHorizon', 'tau', 
+                            'liquidation_time', 'k', 'num_n', 'logReturns']:
+                    if hasattr(custom_env, attr):
+                        setattr(self, attr, getattr(custom_env, attr))
             
-            self.critic_local_2 = Critic(state_size, action_size, random_seed).to(device)
-            self.critic_target_2 = Critic(state_size, action_size, random_seed).to(device)
-            self.critic_optimizer_2 = optim.Adam(self.critic_local_2.parameters(), lr=LR_CRITIC, weight_decay=WEIGHT_DECAY)
-
-            # Noise process
-            self.noise = NormalNoise(action_size, random_seed)
-
-            # Replay memory
-            self.memory = ReplayBuffer(action_size, BUFFER_SIZE, BATCH_SIZE, random_seed)
+            def reset(self):
+                return self.custom_env.reset()
             
-            # TD3 specific parameters
-            self.policy_update_counter = 0
+            def step(self, action):
+                obs, reward, done, info = self.custom_env.step(action)
+                
+                # Convert custom Info object to dict for compatibility
+                if hasattr(info, '__dict__'):
+                    info_dict = info.__dict__.copy()
+                else:
+                    info_dict = {}
+                    
+                # Add any additional attributes from the info object
+                for attr in dir(info):
+                    if not attr.startswith('_') and hasattr(info, attr):
+                        try:
+                            info_dict[attr] = getattr(info, attr)
+                        except:
+                            pass
+                
+                return obs, reward, done, info_dict
+                
+            def seed(self, seed=None):
+                """Seed the environment for reproducibility."""
+                if seed is not None:
+                    np.random.seed(seed)
+                    random.seed(seed)
+                return [seed]
+                
+            def start_transactions(self):
+                if hasattr(self.custom_env, 'start_transactions'):
+                    return self.custom_env.start_transactions()
+                    
+            def stop_transactions(self):
+                if hasattr(self.custom_env, 'stop_transactions'):
+                    return self.custom_env.stop_transactions()
+        
+        return CustomEnvWrapper(env)
     
     def step(self, state, action, reward, next_state, done):
-        """Save experience in replay memory, and use random sample from buffer to learn."""
-        if self.use_sb3:
-            # For stable_baselines3, learning is handled internally
-            return
-        
-        # Save experience / reward
-        self.memory.add(state, action, reward, next_state, done)
-
-        # Learn, if enough samples are available in memory
-        if len(self.memory) > BATCH_SIZE:
-            experiences = self.memory.sample()
-            self.learn(experiences, GAMMA)
-
-    def act(self, state, add_noise=True, transform_method=None):
-        """Returns actions for given state as per current policy."""
-        if self.use_sb3:
-            # Use stable_baselines3 model for action prediction
-            action, _ = self.model.predict(state, deterministic=not add_noise)
-            
-            if transform_method:
-                action = transform_action(action, method=transform_method)
-            
-            return np.clip(action, 0, 1)
-        else:
-            # Custom TD3 implementation
-            state = torch.from_numpy(state).float().to(device)
-            self.actor_local.eval()
-            with torch.no_grad():
-                action = self.actor_local(state).cpu().data.numpy()
-            self.actor_local.train()
-            
-            if add_noise:
-                action += self.noise.sample()
-            
-            action = (action + 1.0) / 2.0
-            
-            if transform_method:
-                action = transform_action(action, method=transform_method)
-            
-            return np.clip(action, 0, 1)
-
-    def learn_sb3(self, total_timesteps):
-        """Learn using stable_baselines3 TD3."""
-        if self.use_sb3:
-            self.model.learn(total_timesteps=total_timesteps)
-
-    def reset(self):
-        """Reset noise process."""
-        if not self.use_sb3:
-            self.noise.reset()
-
-    def learn(self, experiences, gamma):
-        """Update policy and value parameters using given batch of experience tuples (TD3 algorithm).
-        
-        Params
-        ======
-            experiences (Tuple[torch.Tensor]): tuple of (s, a, r, s', done) tuples 
-            gamma (float): discount factor
         """
-        if self.use_sb3:
-            return  # Learning is handled internally by stable_baselines3
-            
-        states, actions, rewards, next_states, dones = experiences
-        self.policy_update_counter += 1
-
-        # ---------------------------- update critics ---------------------------- #
-        with torch.no_grad():
-            # Target policy smoothing: add noise to target actions
-            noise = torch.randn_like(actions) * TARGET_NOISE
-            noise = torch.clamp(noise, -NOISE_CLIP, NOISE_CLIP)
-            
-            next_actions = self.actor_target(next_states) + noise
-            next_actions = torch.clamp(next_actions, -1, 1)
-            
-            # Compute target Q-values using the minimum of two critics (clipped double Q-learning)
-            target_q1 = self.critic_target_1(next_states, next_actions)
-            target_q2 = self.critic_target_2(next_states, next_actions)
-            target_q = torch.min(target_q1, target_q2)
-            
-            # Compute Q targets for current states
-            Q_targets = rewards + (gamma * target_q * (1 - dones))
-
-        # Update first critic
-        current_q1 = self.critic_local_1(states, actions)
-        critic_loss_1 = F.mse_loss(current_q1, Q_targets)
-        self.critic_optimizer_1.zero_grad()
-        critic_loss_1.backward()
-        self.critic_optimizer_1.step()
-
-        # Update second critic
-        current_q2 = self.critic_local_2(states, actions)
-        critic_loss_2 = F.mse_loss(current_q2, Q_targets)
-        self.critic_optimizer_2.zero_grad()
-        critic_loss_2.backward()
-        self.critic_optimizer_2.step()
-
-        # ---------------------------- update actor (delayed) ---------------------------- #
-        if self.policy_update_counter % POLICY_DELAY == 0:
-            # Compute actor loss using only the first critic
-            actions_pred = self.actor_local(states)
-            actor_loss = -self.critic_local_1(states, actions_pred).mean()
-            
-            # Minimize the loss
-            self.actor_optimizer.zero_grad()
-            actor_loss.backward()
-            self.actor_optimizer.step()
-
-            # ----------------------- update target networks ----------------------- #
-            self.soft_update(self.critic_local_1, self.critic_target_1, TAU)
-            self.soft_update(self.critic_local_2, self.critic_target_2, TAU)
-            self.soft_update(self.actor_local, self.actor_target, TAU)
-
-    def soft_update(self, local_model, target_model, tau):
-        """Soft update model parameters.
-        θ_target = τ*θ_local + (1 - τ)*θ_target
-
-        Params
-        ======
-            local_model: PyTorch model (weights will be copied from)
-            target_model: PyTorch model (weights will be copied to)
-            tau (float): interpolation parameter 
+        Save experience in replay memory for learning.
+        
+        For TD3 with stable-baselines3, this is handled internally by the learn() method.
+        This method is kept for compatibility with the existing DDPG training loop.
         """
-        for target_param, local_param in zip(target_model.parameters(), local_model.parameters()):
-            target_param.data.copy_(tau*local_param.data + (1.0-tau)*target_param.data)
-
-    def save(self, filepath):
-        """Save the model."""
-        if self.use_sb3:
-            self.model.save(filepath)
-        else:
-            torch.save({
-                'actor_local': self.actor_local.state_dict(),
-                'actor_target': self.actor_target.state_dict(),
-                'critic_local_1': self.critic_local_1.state_dict(),
-                'critic_target_1': self.critic_target_1.state_dict(),
-                'critic_local_2': self.critic_local_2.state_dict(),
-                'critic_target_2': self.critic_target_2.state_dict(),
-            }, filepath)
-
-    def load(self, filepath):
-        """Load the model."""
-        if self.use_sb3:
-            self.model = TD3.load(filepath)
-        else:
-            checkpoint = torch.load(filepath)
-            self.actor_local.load_state_dict(checkpoint['actor_local'])
-            self.actor_target.load_state_dict(checkpoint['actor_target'])
-            self.critic_local_1.load_state_dict(checkpoint['critic_local_1'])
-            self.critic_target_1.load_state_dict(checkpoint['critic_target_1'])
-            self.critic_local_2.load_state_dict(checkpoint['critic_local_2'])
-            self.critic_target_2.load_state_dict(checkpoint['critic_target_2'])
-
-class NormalNoise:
-    """Normal noise process for exploration."""
-
-    def __init__(self, size, seed, mu=0., sigma=0.2):
-        """Initialize parameters and noise process."""
-        self.mu = mu
-        self.sigma = sigma
-        self.size = size
-        self.seed = random.seed(seed)
-
-    def reset(self):
-        """Reset noise (no-op for normal noise)."""
         pass
-
-    def sample(self):
-        """Sample noise from normal distribution."""
-        return np.random.normal(self.mu, self.sigma, self.size)
-
-class ReplayBuffer:
-    """Fixed-size buffer to store experience tuples."""
-
-    def __init__(self, action_size, buffer_size, batch_size, seed):
-        """Initialize a ReplayBuffer object.
-        Params
-        ======
-            buffer_size (int): maximum size of buffer
-            batch_size (int): size of each training batch
+    
+    def act(self, state, add_noise=True, deterministic=False, transform_method=None):
         """
-        self.action_size = action_size
-        self.memory = deque(maxlen=buffer_size)
-        self.batch_size = batch_size
-        self.experience = namedtuple("Experience", field_names=["state", "action", "reward", "next_state", "done"])
-        self.seed = random.seed(seed)
+        Returns actions for given state as per current policy.
+        
+        :param state: Current state observation
+        :param add_noise: Whether to add noise for exploration (ignored if deterministic=True)
+        :param deterministic: Whether to use deterministic action selection
+        :param transform_method: Method to transform action using transform_action function
+        :return: Clipped action in range [0, 1]
+        """
+        if self.model is None:
+            raise ValueError("Model not initialized. Please provide environment in __init__.")
+        
+        # Deterministic takes precedence over add_noise
+        use_deterministic = deterministic or not add_noise
+        
+        # Get action from TD3 policy
+        action, _ = self.model.predict(state, deterministic=use_deterministic)
+        
+        # TD3 outputs actions in range [-1, 1] due to tanh activation
+        # Scale to [0, 1] for compatibility with existing system
+        scaled_action = (action + 1.0) / 2.0
+        
+        # Apply action transformation if specified
+        if transform_method and self.env:
+            # transform_action returns a float, so we need to convert back to array
+            transformed_value = transform_action(scaled_action, self.env, method=transform_method)
+            scaled_action = np.array([transformed_value] if np.isscalar(transformed_value) else transformed_value)
+        
+        return np.clip(scaled_action, 0, 1)
     
-    def add(self, state, action, reward, next_state, done):
-        """Add a new experience to memory."""
-        e = self.experience(state, action, reward, next_state, done)
-        self.memory.append(e)
+    def reset(self):
+        """Reset the agent's internal state."""
+        # Reset action noise
+        if hasattr(self, 'action_noise'):
+            self.action_noise.reset()
     
-    def sample(self):
-        """Randomly sample a batch of experiences from memory."""
-        experiences = random.sample(self.memory, k=self.batch_size)
+    def learn(self, experiences=None, gamma=None, total_timesteps=1000):
+        """
+        Learn from experiences using TD3 algorithm.
+        
+        For compatibility with DDPG interface, this method can be called.
+        The actual learning is handled by stable-baselines3's internal training loop.
+        
+        :param experiences: Not used in SB3 implementation (kept for compatibility)
+        :param gamma: Not used in SB3 implementation (kept for compatibility)
+        :param total_timesteps: Number of timesteps for training
+        """
+        if self.model is None:
+            raise ValueError("Model not initialized. Please provide environment in __init__.")
+        
+        # Use stable-baselines3's learn method which handles the full training loop
+        self.model.learn(total_timesteps=total_timesteps)
+    
+    def save(self, path):
+        """Save the trained model."""
+        if self.model is not None:
+            self.model.save(path)
+    
+    def load(self, path, env=None):
+        """Load a trained model."""
+        if env is not None:
+            self.env = env
+            # Check if it's a gym environment or custom environment
+            if hasattr(env, 'observation_space') and hasattr(env, 'action_space'):
+                # Standard gym environment
+                self.vec_env = make_vec_env(lambda: env, n_envs=1)
+            else:
+                # Custom environment - create a gym wrapper
+                wrapped_env = self._wrap_custom_env(env)
+                self.vec_env = make_vec_env(lambda: wrapped_env, n_envs=1)
+        
+        if self.vec_env is not None:
+            self.model = TD3.load(path, env=self.vec_env)
+        else:
+            raise ValueError("Environment must be provided to load model.")
+    
+    def get_hyperparameters(self):
+        """Get current hyperparameters."""
+        return self.hyperparams.copy()
+    
+    def set_hyperparameters(self, **kwargs):
+        """Update hyperparameters (only works before model initialization)."""
+        if self.model is not None:
+            print("Warning: Model already initialized. Hyperparameter changes won't take effect.")
+        self.hyperparams.update(kwargs)
 
-        states = torch.from_numpy(np.vstack([e.state for e in experiences if e is not None])).float().to(device)
-        actions = torch.from_numpy(np.vstack([e.action for e in experiences if e is not None])).float().to(device)
-        rewards = torch.from_numpy(np.vstack([e.reward for e in experiences if e is not None])).float().to(device)
-        next_states = torch.from_numpy(np.vstack([e.next_state for e in experiences if e is not None])).float().to(device)
-        dones = torch.from_numpy(np.vstack([e.done for e in experiences if e is not None]).astype(np.uint8)).float().to(device)
 
-        return (states, actions, rewards, next_states, dones)
-
-    def __len__(self):
-        """Return the current size of internal memory."""
-        return len(self.memory)
+# Alias for backward compatibility
+Agent = TD3Agent

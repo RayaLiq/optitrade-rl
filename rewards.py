@@ -131,6 +131,14 @@ def Market_Aware_Reward(env, info, action=None):
     return trend_alignment * info.share_to_sell_now / env.total_shares
 
 
+def sparse_reward(env, info, action=None):
+    if env.shares_remaining <= 0:
+        is_shortfall = env.total_shares * env.startingPrice - env.totalCapture
+        return -is_shortfall 
+    else:
+        return 0
+
+
 RewardFn = Callable[..., float]
 REWARD_FN_MAP: Dict[str, RewardFn] = {
     "ac_utility": ac_utility,
@@ -149,6 +157,7 @@ REWARD_FN_MAP: Dict[str, RewardFn] = {
     "Implementation_Shortfall_Focused": Implementation_Shortfall_Focused,
     "Implemetation_Shortfall_Time_Sensitive": Implemetation_Shortfall_Time_Sensitive,
     "permanent_impact_penalty": permanent_impact_penalty,
-    "Market-Aware_Reward": Market_Aware_Reward,
-    "VWAP_Benchmarking": VWAP_Benchmarking
+    "Market_Aware_Reward": Market_Aware_Reward,
+    "VWAP_Benchmarking": VWAP_Benchmarking,
+    "sparse_reward": sparse_reward
 }

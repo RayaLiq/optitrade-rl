@@ -471,3 +471,99 @@ def get_av_std(lq_time = 60, nm_trades = 60, tr_risk = 1e-6, trs = 100):
     ax.yaxis.set_major_formatter(yNumFmt)
     plt.legend()
     plt.show
+
+
+def plot_training_performance(shortfall_history, window_size=100, figsize=(10, 6), file_path=None):
+    """
+    Plots training performance metrics including:
+    - Implementation shortfall per episode
+    - Moving average of shortfall
+    - Highlighted regions for key milestones
+    
+    Parameters:
+        shortfall_history (array): Array of implementation shortfall values per episode
+        window_size (int): Size of moving average window (default=100)
+        figsize (tuple): Figure dimensions (default=(10,6))
+        file_path (str): Optional path to save the plot image
+    """
+    plt.figure(figsize=figsize)
+    
+    # Convert to numpy array for vector operations
+    shortfalls = np.array(shortfall_history)
+    episodes = np.arange(1, len(shortfalls) + 1)
+    
+    # Plot raw shortfall values
+    plt.plot(episodes, shortfalls, 'b-', alpha=0.3, label='Episode Shortfall')
+    
+    # Calculate and plot moving average
+    if len(shortfalls) >= window_size:
+        moving_avg = np.convolve(shortfalls, np.ones(window_size)/window_size, mode='valid')
+        plt.plot(episodes[window_size-1:], moving_avg, 'r-', linewidth=2, 
+                 label=f'{window_size}-Episode Moving Avg')
+
+    # Add markers for performance milestones
+    milestone = len(shortfalls) // 2
+    if milestone > 0:
+        plt.axvline(milestone, color='g', linestyle='--', alpha=0.7, 
+                    label=f'Mid-Training (Ep {milestone})')
+    
+    # Formatting
+    plt.title('Training Performance')
+    plt.xlabel('Episode')
+    plt.ylabel('Implementation Shortfall (USD)')
+    plt.legend()
+    plt.grid(True)
+    plt.yscale('log')  # Log scale often helps visualize financial metrics
+    
+    # Custom y-axis formatter
+    ax = plt.gca()
+    ax.yaxis.set_major_formatter(mticker.StrMethodFormatter('${x:,.0f}'))
+    
+    # Highlight final performance region
+    if len(shortfalls) > 500:
+        final_avg = np.mean(shortfalls[-window_size:])
+        plt.axhline(final_avg, color='m', linestyle='-', alpha=0.4, 
+                    label=f'Final {window_size}-Ep Avg: ${final_avg:,.0f}')
+        plt.fill_between(episodes[-window_size:], 0, shortfalls[-window_size:], 
+                         color='yellow', alpha=0.1)
+
+    if file_path:
+        plt.savefig(file_path, bbox_inches='tight')
+    plt.show()    
+
+
+def plot_training_losses(agent, window_size=100, figsize=(12, 6)):
+    """
+    Plots actor and critic losses during training.
+    
+    Args:
+        agent (Agent): Trained DDPG agent instance
+        window_size (int): Moving average window
+        figsize (tuple): Figure dimensions
+    """
+    plt.figure(figsize=figsize)
+    
+    # Smooth losses with moving average
+    def smooth(scalars, weight=0.9):
+        smoothed = []
+        last = scalars[0]
+        for point in scalars:
+            smoothed_val = last * weight + (1 - weight) * point
+            smoothed.append(smoothed_val)
+            last = smoothed_val
+        return smoothed
+    
+    # Plot raw and smoothed losses
+    plt.plot(agent.actor_losses, 'b-', alpha=0.2, label='Actor Loss (Raw)')
+    plt.plot(smooth(agent.actor_losses), 'b-', label='Actor Loss (Smoothed)')
+    
+    plt.plot(agent.critic_losses, 'r-', alpha=0.2, label='Critic Loss (Raw)')
+    plt.plot(smooth(agent.critic_losses), 'r-', label='Critic Loss (Smoothed)')
+    
+    plt.title('Training Losses')
+    plt.xlabel('Training Steps')
+    plt.ylabel('Loss')
+    plt.yscale('log')  # Log scale often works better for loss visualization
+    plt.legend()
+    plt.grid(True)
+    plt.show()

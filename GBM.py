@@ -154,21 +154,14 @@ class GBMMarketEnvironment():
             info.expected_shortfall = self.get_expected_shortfall(self.total_shares)
             info.expected_variance = self.singleStepVariance * self.tau * self.totalSRSQ
             info.utility = info.expected_shortfall + self.llambda * info.expected_variance
-            
-        # We don't add noise before the first trade    
+      
         if self.k == 0:
             info.price = self.prevImpactedPrice
         else:
-            # Calculate the current stock price using arithmetic brownian motion
-            info.price = self.prevImpactedPrice + np.sqrt(self.singleStepVariance * self.tau) * random.normalvariate(0, 1)
-      
-        #if self.k == 0:
-            #info.price = self.prevImpactedPrice
-        #else:
-            #epsilon = random.normalvariate(0, 1)
-            #drift = (self.mu - 0.5 * self.sigma ** 2) * self.delta_t
-            #diffusion = self.sigma * np.sqrt(self.delta_t) * epsilon
-            #info.price = self.prevImpactedPrice * np.exp(drift + diffusion)
+            epsilon = random.normalvariate(0, 1)
+            drift = (self.mu - 0.5 * self.sigma ** 2) * self.delta_t
+            diffusion = self.sigma * np.sqrt(self.delta_t) * epsilon
+            info.price = self.prevImpactedPrice * np.exp(drift + diffusion)
       
         # If we are transacting, the stock price is affected by the number of shares we sell. The price evolves 
         # according to the Almgren and Chriss price dynamics model. 

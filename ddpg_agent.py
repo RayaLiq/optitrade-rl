@@ -51,6 +51,9 @@ class Agent():
 
         # Replay memory
         self.memory = ReplayBuffer(action_size, BUFFER_SIZE, BATCH_SIZE, random_seed)
+
+        self.critic_losses = []
+        self.actor_losses = [] 
     
     def step(self, state, action, reward, next_state, done):
         """Save experience in replay memory, and use random sample from buffer to learn."""
@@ -107,6 +110,9 @@ class Agent():
         # Compute critic loss
         Q_expected = self.critic_local(states, actions)
         critic_loss = F.mse_loss(Q_expected, Q_targets)
+
+        self.critic_losses.append(critic_loss.item())
+
         # Minimize the loss
         self.critic_optimizer.zero_grad()
         critic_loss.backward()
@@ -116,6 +122,9 @@ class Agent():
         # Compute actor loss
         actions_pred = self.actor_local(states)
         actor_loss = -self.critic_local(states, actions_pred).mean()
+
+        self.actor_losses.append(actor_loss.item())
+
         # Minimize the loss
         self.actor_optimizer.zero_grad()
         actor_loss.backward()

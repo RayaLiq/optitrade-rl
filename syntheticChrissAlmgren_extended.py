@@ -47,6 +47,8 @@ class MarketEnvironment():
         self.prevImpactedPrice = self.startingPrice
         self.transacting = False
         self.k = 0
+        self.cumulative_volume = 0
+        self.vwap_numerator = 0
 
     def reset(self, seed=0, liquid_time=LIQUIDATION_TIME, num_trades=NUM_N, lamb=LLAMBDA):
         self.__init__(randomSeed=seed, lqd_time=liquid_time, num_tr=num_trades, lambd=lamb)

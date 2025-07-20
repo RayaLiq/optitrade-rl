@@ -175,13 +175,15 @@ def run_action_transform_test(transform_methods: List[str], seed_count: int, out
     plt.close()
 
 
+
 def main(argv: List[str] | None = None):
     p = argparse.ArgumentParser("runner")
     p.add_argument("--agent", default="ddpg", help="agent name or module:Class")
-    p.add_argument("--env", default="ac_default", 
+    p.add_argument("--env", default="ac_default",
                    help="Environment: 'ac_default', 'gbm', 'heston_merton', 'heston_merton_fees', or 'module:Class'")
     p.add_argument("--reward", nargs="+", default=["ac_utility"], help="rewards for single‑run mode")
     p.add_argument("--compare-reward", nargs="*", help="Batch-compare reward functions (use 'all' for every reward)")
+    p.add_argument("--compare-agents", action="store_true", help="Batch-compare all agents (ddpg, sac, td3).")
     p.add_argument("--episodes", type=int, default=10000)
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--csv-dir", default="runs", help="folder to dump CSVs")
@@ -189,40 +191,33 @@ def main(argv: List[str] | None = None):
     p.add_argument("--plot", action="store_true", help="plot summary bar + box plots if comparing")
     p.add_argument("--transform-methods", nargs="+", default=["linear", "square", "sqrt", "exp", "sigmoid", "clip"], help="Action transforms")
     p.add_argument("--action", nargs="+", default=["linear"],
-               help="Action transform(s) for single-run mode")
+                   help="Action transform(s) for single-run mode")
     p.add_argument("--compare-action", nargs="*",
-                help="Batch compare action transforms (use 'all' for every method)")
-    
+                   help="Batch compare action transforms (use 'all' for every method)")
+
     # Fee configuration arguments
     p.add_argument("--fee-fixed", type=float, default=10.0, help="Fixed fee per trade")
     p.add_argument("--fee-prop", type=float, default=0.001, help="Proportional fee rate")
-    
+
     # Action transform test arguments
     p.add_argument("--run-action-test", action="store_true", help="Run action transformation test")
     p.add_argument("--test-seeds", type=int, default=10, help="Number of seeds for action transform test")
-
 
     args = p.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
     csv_dir = Path(args.csv_dir)
     fee_config = {"fixed": args.fee_fixed, "prop": args.fee_prop}
 
-
-    # --- Restored Action Test Mode ---
+    # --- Action Test Mode ---
     if args.run_action_test:
         logging.info("Running dedicated action transform test...")
         run_action_transform_test(args.transform_methods, args.test_seeds, csv_dir, args.env)
         return
+
+    # --- Batch and Agent Selection (Updated Logic) ---
+    # Use the new --compare-agents flag for selecting agents
+    agents_to_run = ['ddpg', 'sac', 'td3'] if args.compare_agents else [args.agent]
     
-    # --- Batch and Agent Selection (Integrated Logic) ---
-    agents_to_run = ['ddpg', 'sac', 'td3'] if args.agent.lower() == 'all' else [args.agent]
-    reward_batch = list(REWARD_FN_MAP.keys()) if args.compare_reward is not None else args.reward
-    action_batch = list(TRANSFORMS.keys()) if args.compare_action is not None else args.action
-
-
-    # ------------------------------------------------------------------
-    # Build reward and action batches
-    # ------------------------------------------------------------------
     if args.compare_reward is not None:
         reward_batch = (list(REWARD_FN_MAP.keys()) if
                         (len(args.compare_reward) == 0 or
@@ -238,8 +233,6 @@ def main(argv: List[str] | None = None):
                         else args.compare_action)
     else:
         action_batch = args.action
-    # ------------------------------------------------------------------
-
 
     summary: dict[str, dict] = {}
 
@@ -249,7 +242,6 @@ def main(argv: List[str] | None = None):
                 tag = f"{agent_to_run}|{r}|{a}"
                 logging.info(f"----- Running experiment for: {tag} -----")
                 
-                # --- SAC-specific hyperparameter logic ---
                 agent_kwargs = {}
                 if agent_to_run == "sac":
                     agent_kwargs['policy_kwargs'] = dict(net_arch=[256, 256])
@@ -270,7 +262,6 @@ def main(argv: List[str] | None = None):
                     fee_config=fee_config, agent_kwargs=agent_kwargs
                 )
                 
-                # --- Storing results with clear labels ---
                 summary[tag] = {
                     "Agent": agent_to_run, "Reward": r, "Action": a,
                     "reward_mean": m_r, "reward_std": s_r,
@@ -282,7 +273,7 @@ def main(argv: List[str] | None = None):
         logging.warning("No experiments were run. Exiting.")
         return
         
-    # --- CSV Saving (Restored Tidy Format) ---
+    # --- CSV Saving ---
     df_all = pd.DataFrame(summary).T
     cols = ["Agent", "Reward", "Action", "reward_mean", "reward_std", "shortfall_mean", "shortfall_std"]
     df_all = df_all.reset_index(drop=True)[cols]
@@ -291,8 +282,27 @@ def main(argv: List[str] | None = None):
     logging.info(f"\nSummary statistics saved to {summary_path}")
     print("\n" + df_all.to_string())
 
-    # --- Plotting (Restored Separate Plots with Agent Hue) ---
+    # --- Plotting (with new agent comparison plot) ---
     if args.plot and len(summary) > 1:
+        if df_all["Agent"].nunique() > 1:
+            logging.info("Generating agent comparison plot...")
+            g = sns.catplot(
+                data=df_all,
+                x="Agent",
+                y="shortfall_mean",
+                col="Reward",
+                row="Action",
+                kind="bar",
+                palette="viridis",
+                sharey=False
+            )
+            g.fig.suptitle("Agent Comparison by Avg. Implementation Shortfall", y=1.03)
+            g.set_axis_labels("Agent", "Avg Implementation Shortfall ($)")
+            g.set_titles("Reward: {col_name} | Action: {row_name}")
+            g.fig.tight_layout(rect=[0, 0, 1, 0.97])
+            plt.savefig(csv_dir / "shortfall_by_agent.png")
+            plt.close('all')
+
         if df_all["Reward"].nunique() > 1:
             plt.figure(figsize=(10, 6))
             sns.barplot(data=df_all, x="Reward", y="shortfall_mean", hue="Agent", palette="viridis", dodge=True)
@@ -302,6 +312,7 @@ def main(argv: List[str] | None = None):
             plt.tight_layout()
             plt.savefig(csv_dir / "shortfall_by_reward.png")
             plt.close()
+            
         if df_all["Action"].nunique() > 1:
             plt.figure(figsize=(max(10, 0.9 * df_all['Action'].nunique()), 6))
             sns.barplot(data=df_all, x="Action", y="shortfall_mean", hue="Agent", palette="magma", dodge=True)
@@ -311,6 +322,7 @@ def main(argv: List[str] | None = None):
             plt.tight_layout()
             plt.savefig(csv_dir / "shortfall_by_action.png")
             plt.close()
+            
 
 if __name__ == "__main__":
     main()

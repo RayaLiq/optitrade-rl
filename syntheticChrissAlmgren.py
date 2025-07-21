@@ -1,6 +1,7 @@
 import random
 import numpy as np
 import collections
+from rewards import REWARD_FN_MAP
 
 
 # ------------------------------------------------ Financial Parameters --------------------------------------------------- #
@@ -34,7 +35,8 @@ class MarketEnvironment():
     def __init__(self, randomSeed = 0,
                  lqd_time = LIQUIDATION_TIME,
                  num_tr = NUM_N,
-                 lambd = LLAMBDA):
+                 lambd = LLAMBDA,
+                 reward_fn="ac_utility"):
         
         # Set the random seed
         random.seed(randomSeed)
@@ -79,9 +81,11 @@ class MarketEnvironment():
                            
         # Set a variable to keep trak of the trade number
         self.k = 0
+        # Set a reward function
+        self.reward_function = REWARD_FN_MAP[reward_fn]
         
         
-    def reset(self, seed = 0, liquid_time = LIQUIDATION_TIME, num_trades = NUM_N, lamb = LLAMBDA):
+    def reset(self, seed = 0, reward_fn="ac_utility", liquid_time = LIQUIDATION_TIME, num_trades = NUM_N, lamb = LLAMBDA):
         
         # Initialize the environment with the given parameters
         self.__init__(randomSeed = seed, lqd_time = liquid_time, num_tr = num_trades, lambd = lamb)
@@ -89,6 +93,8 @@ class MarketEnvironment():
         # Set the initial state to [0,0,0,0,0,0,1,1]
         self.initial_state = np.array(list(self.logReturns) + [self.timeHorizon / self.num_n, \
                                                                self.shares_remaining / self.total_shares])
+        self.reward_function = REWARD_FN_MAP[reward_fn]
+
         return self.initial_state
 
     
@@ -190,9 +196,7 @@ class MarketEnvironment():
             self.prevImpactedPrice = info.price - info.currentPermanentImpact
             
             # Calculate the reward
-            currentUtility = self.compute_AC_utility(self.shares_remaining)
-            reward = (abs(self.prevUtility) - abs(currentUtility)) / abs(self.prevUtility)
-            self.prevUtility = currentUtility
+            reward = self.reward_function(self, info, action)
             
             # If all the shares have been sold calculate E, V, and U, and give a positive reward.
             if self.shares_remaining <= 0:

@@ -26,17 +26,17 @@ def make_env(env_name: str, reward_fn: str, seed: int, fee_config: dict = None) 
     Creates an environment instance.
     """
     if env_name == "ac_default":
-        return ACTradingGym(reward_name=reward_fn, seed=seed)
-    
+        from syntheticChrissAlmgren import MarketEnvironment
+        return MarketEnvironment(randomSeed=seed, reward_fn=reward_fn)
     elif env_name == "gbm":
         from GBM import GBMMarketEnvironment
-        return GBMMarketEnvironment(randomSeed=seed)
+        return GBMMarketEnvironment(randomSeed=seed, reward_fn=reward_fn)
     elif env_name == "heston_merton":
         from Hetson_Merton_Env import HestonMertonEnvironment
-        return HestonMertonEnvironment(randomSeed=seed, fee_config=fee_config)
+        return HestonMertonEnvironment(randomSeed=seed, reward_fn=reward_fn)
     elif env_name == "heston_merton_fees":
         from Hetson_Merton_fees import HestonMertonFeesEnvironment
-        return HestonMertonFeesEnvironment(randomSeed=seed, fee_config=fee_config)
+        return HestonMertonEnvironment(randomSeed=seed, fee_config=fee_config, reward_fn=reward_fn)
     else:
         try:
             module_name, cls_name = env_name.split(":")

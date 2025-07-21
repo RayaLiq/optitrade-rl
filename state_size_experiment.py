@@ -28,7 +28,7 @@ def setup_directories(base_path):
         logging.error(f"Failed to create directory {base_path}: {str(e)}")
         return False
 
-def run_state_size_experiment(state_sizes, episodes=1000, seed=42):
+def run_state_size_experiment(state_sizes, episodes=10000, seed=42):
     results = []
     base_path = "state_size_results"
     

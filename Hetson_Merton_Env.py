@@ -126,13 +126,7 @@ class HestonMertonEnvironment():
         self.jump_sigma = MERTON_SIGMA_J
 
         self.current_variance = HESTON_V0  # Reset variance
-        if fee_config is None:
-            fee_config = {}
-
-        self.fee_fixed = fee_config.get("fixed", 10.0)
-        self.fee_prop = fee_config.get("prop", 0.001)
-
-        
+     
         
     def reset(self, seed = 0, reward_fn = None, liquid_time = LIQUIDATION_TIME, num_trades = NUM_N, lamb = LLAMBDA):
         

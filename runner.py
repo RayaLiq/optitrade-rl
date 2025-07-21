@@ -130,7 +130,7 @@ def train_once(
     
     # Create environment
     env = make_env(env_name, reward_fn, seed, fee_config, **env_kwargs)
-    
+    total_shares
     # Create agent
     state_size = None
     if hasattr(env, 'observation_space_dimension'):
@@ -291,7 +291,7 @@ def main(argv: List[str] | None = None):
     }
     
     # Prepare environment parameters
-    env_kwargs = {
+    """env_kwargs = {
         "total_shares": args.total_shares,
         "liquidation_time": args.liquidation_time,
         "startingPrice": args.starting_price,
@@ -304,7 +304,7 @@ def main(argv: List[str] | None = None):
         "jump_lambda": args.jump_lambda,
         "jump_mu": args.jump_mu,
         "jump_sigma": args.jump_sigma
-    }
+    }"""
     
     # Prepare agent parameters
     agent_kwargs = {

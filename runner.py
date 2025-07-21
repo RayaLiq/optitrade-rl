@@ -10,6 +10,7 @@ import logging
 from tqdm import trange
 import pandas as pd
 
+from gym_wrappers import ACTradingGym
 from ddpg_agent import Agent as DDPGAgent
 from actions import transform_action, TRANSFORMS
 from rewards import REWARD_FN_MAP
@@ -25,17 +26,16 @@ def make_env(env_name: str, reward_fn: str, seed: int, fee_config: dict = None) 
     Creates an environment instance.
     """
     if env_name == "ac_default":
-        from syntheticChrissAlmgren import MarketEnvironment
-        return MarketEnvironment(randomSeed=seed, reward_fn=reward_fn)
+        return ACTradingGym(env_type="ac", reward_name="ac_utility", seed=123)
     elif env_name == "gbm":
         from GBM import GBMMarketEnvironment
-        return GBMMarketEnvironment(randomSeed=seed, reward_fn=reward_fn)
+        return ACTradingGym(env_type="gbm", reward_name="ac_utility", seed=123)
     elif env_name == "heston_merton":
         from Hetson_Merton_Env import HestonMertonEnvironment
-        return HestonMertonEnvironment(randomSeed=seed, reward_fn=reward_fn)
+        return ACTradingGym(env_type="hm", reward_name="ac_utility", seed=123)
     elif env_name == "heston_merton_fees":
         from Hetson_Merton_fees import HestonMertonFeesEnvironment
-        return HestonMertonEnvironment(randomSeed=seed, fee_config=fee_config, reward_fn=reward_fn)
+        return ACTradingGym(env_type="hmf", reward_name="ac_utility", seed=123)
     else:
         try:
             module_name, cls_name = env_name.split(":")
@@ -55,14 +55,15 @@ def make_agent(agent_name: str, env: gym.Env, seed: int, **kwargs):
     """
     agent_name_lower = agent_name.lower()
 
-    # Handle custom environment interface
-    try:
+    # Extract state/action dimensions in a robust way
+    if hasattr(env, 'observation_space') and hasattr(env, 'action_space'):
         state_size = env.observation_space.shape[0]
         action_size = env.action_space.shape[0]
-    except AttributeError:
-        # Fallback to custom methods
+    elif hasattr(env, 'observation_space_dimension') and hasattr(env, 'action_space_dimension'):
         state_size = env.observation_space_dimension()
         action_size = env.action_space_dimension()
+    else:
+        raise TypeError("The provided environment doesn't have valid observation/action space interface.")
 
     if agent_name_lower == "ddpg":
         return DDPGAgent(state_size=state_size, action_size=action_size, random_seed=seed)
@@ -97,7 +98,7 @@ def train_once(env_name: str, agent_name: str, reward_fn: str, act_method: str, 
 
     if agent_name.lower() in ["sac" , "td3"]:
         # --- SB3 (SAC) Workflow: Learn then Evaluate ---
-        total_timesteps = episodes * env.num_n
+        total_timesteps = episodes * env._ac_env.num_n
         log.info(f"Starting SAC training for {total_timesteps} timesteps...")
         agent.learn(total_timesteps=total_timesteps)
         log.info("SAC training finished.")
@@ -105,13 +106,14 @@ def train_once(env_name: str, agent_name: str, reward_fn: str, act_method: str, 
         log.info(f"Starting SAC evaluation for {episodes} episodes...")
         for ep in trange(episodes, desc=f"Evaluating {agent_name}"):
             state, _ = env.reset(seed=seed + ep)
-            done, tot_r, episode_fees = False, 0.0, 0.0
-            while not (done):
+            done, truncated, tot_r, episode_fees = False, False, 0.0, 0.0
+            while not (done or truncated):
                 raw_action = agent.act(state, deterministic=True)
-                action = transform_action(raw_action, env, act_method)
-                state, reward, done, info = env.step(action)
+                action = transform_action(raw_action, env._ac_env, act_method)
+                state, reward, done, truncated, info = env.step(action)
                 tot_r += reward
-
+                if 'total_fees' in info:
+                    episode_fees += info['total_fees']
             rewards.append(tot_r)
             shortfalls.append(info.get("impl_shortfall", np.nan))
             fee_data.append(episode_fees)
@@ -119,17 +121,18 @@ def train_once(env_name: str, agent_name: str, reward_fn: str, act_method: str, 
     else: # DDPG Workflow
         log.info(f"Starting DDPG training for {episodes} episodes...")
         for ep in trange(episodes, desc=f"Training {agent_name}"):
-            state = env.reset(seed=seed + ep)
+            state, _ = env.reset(seed=seed + ep)
             agent.reset()
-            done, tot_r, episode_fees = False, 0.0, 0.0
-            while not (done):
+            done, truncated, tot_r, episode_fees = False, False, 0.0, 0.0
+            while not (done or truncated):
                 raw_action = agent.act(state, add_noise=noiseflag)
-                action = transform_action(raw_action, env, act_method)
-                next_state, reward, done, info = env.step(action)
-                agent.step(state, action, reward, next_state, done)
+                action = transform_action(raw_action, env._ac_env, act_method)
+                next_state, reward, done, truncated, info = env.step(action)
+                agent.step(state, action, reward, next_state, (done or truncated))
                 tot_r += reward
                 state = next_state
-                
+                if 'total_fees' in info:
+                    episode_fees += info['total_fees']
             rewards.append(tot_r)
             shortfalls.append(info.get("impl_shortfall", np.nan))
             fee_data.append(episode_fees)
@@ -159,11 +162,11 @@ def run_action_transform_test(transform_methods: List[str], seed_count: int, out
             env = make_env(env_name, "ac_utility", seed)
             agent = DDPGAgent(state_size=env.observation_space.shape[0], action_size=1, random_seed=seed)
             state, _ = env.reset(seed=seed)
-            done= False
-            while not done:
+            done, truncated = False, False
+            while not (done or truncated):
                 raw_action = agent.act(state, add_noise=False)
                 action = transform_action(raw_action, env._ac_env, method)
-                state, _, done, info = env.step(action)
+                state, _, done, truncated, info = env.step(action)
             shortfalls.append(info.get("impl_shortfall", np.nan))
         results[method] = {'mean_shortfall': np.nanmean(shortfalls), 'std_shortfall': np.nanstd(shortfalls)}
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -178,6 +181,8 @@ def run_action_transform_test(transform_methods: List[str], seed_count: int, out
     plt.tight_layout()
     plt.savefig(output_dir / "action_transform_plot.png")
     plt.close()
+
+
 
 def main(argv: List[str] | None = None):
     p = argparse.ArgumentParser("runner")

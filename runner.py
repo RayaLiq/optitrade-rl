@@ -99,7 +99,7 @@ def train_once(env_name: str, agent_name: str, reward_fn: str, act_method: str, 
 
     if agent_name.lower() in ["sac" , "td3"]:
         # --- SB3 (SAC) Workflow: Learn then Evaluate ---
-        total_timesteps = episodes * env._ac_env.num_n
+        total_timesteps = episodes * env.num_n
         log.info(f"Starting SAC training for {total_timesteps} timesteps...")
         agent.learn(total_timesteps=total_timesteps)
         log.info("SAC training finished.")
@@ -110,7 +110,7 @@ def train_once(env_name: str, agent_name: str, reward_fn: str, act_method: str, 
             done, truncated, tot_r, episode_fees = False, False, 0.0, 0.0
             while not (done or truncated):
                 raw_action = agent.act(state, deterministic=True)
-                action = transform_action(raw_action, env._ac_env, act_method)
+                action = transform_action(raw_action, env, act_method)
                 state, reward, done, truncated, info = env.step(action)
                 tot_r += reward
                 if 'total_fees' in info:
@@ -127,7 +127,7 @@ def train_once(env_name: str, agent_name: str, reward_fn: str, act_method: str, 
             done, truncated, tot_r, episode_fees = False, False, 0.0, 0.0
             while not (done or truncated):
                 raw_action = agent.act(state, add_noise=noiseflag)
-                action = transform_action(raw_action, env._ac_env, act_method)
+                action = transform_action(raw_action, env, act_method)
                 next_state, reward, done, truncated, info = env.step(action)
                 agent.step(state, action, reward, next_state, (done or truncated))
                 tot_r += reward

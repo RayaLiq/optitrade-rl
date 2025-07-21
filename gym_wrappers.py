@@ -93,9 +93,9 @@ class ACTradingGym(gym.Env):
     # ------------------------------------------------------------------
     def reset(self, *, seed: int | None = None, options: dict | None = None) -> Tuple[np.ndarray, dict[str, Any]]:
         if seed is not None:
-            obs = self._ac_env.reset(seed)
+            obs = self._ac_env.reset(seed=seed, reward_fn=self.reward_fn)  # Add reward_fn
         else:
-            obs = self._ac_env.reset()
+            obs = self._ac_env.reset(reward_fn=self.reward_fn)  # Add reward_fn
         self._ac_env.start_transactions()
         self._steps = 0
         return obs.astype(np.float32), {}

@@ -26,16 +26,16 @@ def make_env(env_name: str, reward_fn: str, seed: int, fee_config: dict = None) 
     Creates an environment instance.
     """
     if env_name == "ac_default":
-        return ACTradingGym(env_type="ac", reward_fn="ac_utility", seed=0)
+        return ACTradingGym(env_type="ac", reward_fn=reward_fn, seed=seed)  # Pass reward_fn here
     elif env_name == "gbm":
         from GBM import GBMMarketEnvironment
-        return ACTradingGym(env_type="gbm", reward_fn="ac_utility", seed=0)
+        return ACTradingGym(env_type="gbm", reward_fn=reward_fn, seed=seed)  # And here
     elif env_name == "heston_merton":
         from Hetson_Merton_Env import HestonMertonEnvironment
-        return ACTradingGym(env_type="hm", reward_fn="ac_utility", seed=0)
+        return ACTradingGym(env_type="hm", reward_fn=reward_fn, seed=seed)  # And here
     elif env_name == "heston_merton_fees":
         from Hetson_Merton_fees import HestonMertonFeesEnvironment
-        return ACTradingGym(env_type="hmf", reward_fn="ac_utility", seed=0)
+        return ACTradingGym(env_type="hmf", reward_fn=reward_fn, seed=seed)  # And here
     else:
         try:
             module_name, cls_name = env_name.split(":")
@@ -46,7 +46,7 @@ def make_env(env_name: str, reward_fn: str, seed: int, fee_config: dict = None) 
             except TypeError:
                 return cls(randomSeed=seed)
         except (ValueError, ModuleNotFoundError, AttributeError):
-            raise ValueError(f"Unknown env format '{env_name}'.")    
+            raise ValueError(f"Unknown env format '{env_name}'.")      
 
 
 def make_agent(agent_name: str, env: gym.Env, seed: int, **kwargs):

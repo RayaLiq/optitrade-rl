@@ -85,7 +85,7 @@ class MarketEnvironment():
         self.reward_function = REWARD_FN_MAP[reward_fn]
         
         
-    def reset(self, seed = 0, reward_fn="ac_utility", liquid_time = LIQUIDATION_TIME, num_trades = NUM_N, lamb = LLAMBDA):
+    def reset(self, seed = 0, reward_fn=None, liquid_time = LIQUIDATION_TIME, num_trades = NUM_N, lamb = LLAMBDA):
         
         # Initialize the environment with the given parameters
         self.__init__(randomSeed = seed, lqd_time = liquid_time, num_tr = num_trades, lambd = lamb)
@@ -93,7 +93,8 @@ class MarketEnvironment():
         # Set the initial state to [0,0,0,0,0,0,1,1]
         self.initial_state = np.array(list(self.logReturns) + [self.timeHorizon / self.num_n, \
                                                                self.shares_remaining / self.total_shares])
-        self.reward_function = REWARD_FN_MAP[reward_fn]
+        if reward_fn is not None:
+            self.reward_function = REWARD_FN_MAP[reward_fn]
 
         return self.initial_state
 

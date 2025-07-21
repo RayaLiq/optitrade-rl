@@ -129,8 +129,8 @@ def train_once(
         env_kwargs = {}
     
     # Create environment
-    env = make_env(env_name, reward_fn, seed, fee_config, **env_kwargs)
-    total_shares
+    env = make_env(env_name, reward_fn, seed, fee_config)
+
     # Create agent
     state_size = None
     if hasattr(env, 'observation_space_dimension'):

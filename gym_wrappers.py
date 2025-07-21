@@ -37,7 +37,7 @@ class ACTradingGym(gym.Env):
     metadata = {"render_modes": []}
 
     def __init__(self, env_type: str = "ac", reward_fn: str = "ac_utility", seed: int = 0,
-                 liquid_time: int = 60, num_trades: int = 60, lamb: float = 1e-6):
+                 liquid_time: int = 60, num_trades: int = 60, lamb: float = 1e-6, state_size=6):
         super().__init__()
         self.env_type = env_type
         self.reward_fn = reward_fn 
@@ -48,7 +48,8 @@ class ACTradingGym(gym.Env):
                 lqd_time=liquid_time,
                 num_tr=num_trades,
                 lambd=lamb,
-                reward_fn= reward_fn
+                reward_fn= reward_fn,
+                state_size=state_size
             )
         elif env_type == "gbm":
             self._ac_env = GBMMarketEnvironment(

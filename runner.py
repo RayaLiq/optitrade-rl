@@ -122,7 +122,7 @@ def train_once(env_name: str, agent_name: str, reward_fn: str, act_method: str, 
     else: # DDPG Workflow
         log.info(f"Starting DDPG training for {episodes} episodes...")
         for ep in trange(episodes, desc=f"Training {agent_name}"):
-            state, _ = env.reset(seed=seed + ep)
+            state = env.reset(seed=seed + ep)
             agent.reset()
             done, truncated, tot_r, episode_fees = False, False, 0.0, 0.0
             while not (done or truncated):

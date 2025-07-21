@@ -9,7 +9,7 @@ import numpy as np
 import logging
 from tqdm import trange
 import pandas as pd
-
+import importlib
 from gym_wrappers import ACTradingGym
 from ddpg_agent import Agent as DDPGAgent
 from actions import transform_action, TRANSFORMS
@@ -26,16 +26,16 @@ def make_env(env_name: str, reward_fn: str, seed: int, fee_config: dict = None) 
     Creates an environment instance.
     """
     if env_name == "ac_default":
-        return ACTradingGym(env_type="ac", reward_name="ac_utility", seed=123)
+        return ACTradingGym(env_type="ac", reward_name="ac_utility", seed=0)
     elif env_name == "gbm":
         from GBM import GBMMarketEnvironment
-        return ACTradingGym(env_type="gbm", reward_name="ac_utility", seed=123)
+        return ACTradingGym(env_type="gbm", reward_name="ac_utility", seed=0)
     elif env_name == "heston_merton":
         from Hetson_Merton_Env import HestonMertonEnvironment
-        return ACTradingGym(env_type="hm", reward_name="ac_utility", seed=123)
+        return ACTradingGym(env_type="hm", reward_name="ac_utility", seed=0)
     elif env_name == "heston_merton_fees":
         from Hetson_Merton_fees import HestonMertonFeesEnvironment
-        return ACTradingGym(env_type="hmf", reward_name="ac_utility", seed=123)
+        return ACTradingGym(env_type="hmf", reward_name="ac_utility", seed=0)
     else:
         try:
             module_name, cls_name = env_name.split(":")

@@ -18,6 +18,8 @@ from rewards import REWARD_FN_MAP
 from sac import SB3SACAgent
 from td3 import TD3Agent
 
+from utils import plot_training_performance, plot_training_losses
+
 
 def make_env(env_name: str, reward_fn: str, seed: int, fee_config: dict = None) -> gym.Env:
     """
@@ -84,6 +86,7 @@ def train_once(env_name: str, agent_name: str, reward_fn: str, act_method: str, 
                csv_dir: Path, noiseflag: bool = True, fee_config: dict = None, agent_kwargs: dict = None):
     """
     Main training function with separate logic for DDPG and SB3 agents.
+    Returns tuple of (mean_reward, std_reward, mean_shortfall, std_shortfall, shortfall_history, agent)
     """
     log = logging.getLogger(f"{agent_name}|{reward_fn}|{act_method}")
     if agent_kwargs is None:
@@ -142,7 +145,13 @@ def train_once(env_name: str, agent_name: str, reward_fn: str, act_method: str, 
         df_data["total_fees"] = fee_data
     file_tag = f"{agent_name}_{reward_fn}_{act_method}"
     pd.DataFrame(df_data).to_csv(csv_dir / f"{file_tag}.csv", index=False)
-    return (np.mean(rewards), np.std(rewards), np.mean(shortfalls), np.std(shortfalls))
+    
+    # Return metrics plus the shortfall history and agent instance for plotting
+    return (
+        np.mean(rewards), np.std(rewards), 
+        np.mean(shortfalls), np.std(shortfalls),
+        shortfalls, agent
+    )
 
 
 def run_action_transform_test(transform_methods: List[str], seed_count: int, output_dir: Path, env_name: str):
@@ -254,13 +263,23 @@ def main(argv: List[str] | None = None):
                     agent_kwargs['target_noise_clip'] = 0.5
                     agent_kwargs['batch_size'] = 256
                 
-                m_r, s_r, m_s, s_s = train_once(
+                m_r, s_r, m_s, s_s, shortfall_history, trained_agent = train_once(
                     env_name=args.env, agent_name=agent_to_run,
                     reward_fn=r, act_method=a,
                     episodes=args.episodes, seed=args.seed,
                     csv_dir=csv_dir, noiseflag=not args.no_noise,
                     fee_config=fee_config, agent_kwargs=agent_kwargs
                 )
+                # Generate plots after training
+                plot_file_path = csv_dir / f"{tag}_training_performance.png"
+                plot_training_performance(shortfall_history, window_size=100, file_path=plot_file_path)
+
+
+                # Only plot losses for DDPG agent (SAC/TD3 would need different handling)
+                if agent_to_run.lower() == "ddpg":
+                    loss_file_path = csv_dir / f"{tag}_training_losses.png"
+                    plot_training_losses(trained_agent, window_size=100, file_path=loss_file_path)
+
                 
                 summary[tag] = {
                     "Agent": agent_to_run, "Reward": r, "Action": a,

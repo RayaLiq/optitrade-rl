@@ -321,12 +321,7 @@ class HestonMertonEnvironment():
         st = self.epsilon * sharesToSell
         tt = (self.eta_hat / self.tau) * self.totalSSSQ
 
-        # Add expected fees (fixed fee per trade + proportional fee)
-        expected_trades = self.num_n
-        expected_fixed_fees = self.fee_fixed * expected_trades
-        expected_prop_fees = self.fee_prop * (sharesToSell * self.startingPrice)
-
-        return ft + st + tt + expected_fixed_fees + expected_prop_fees
+        return ft + st + tt 
 
     def get_AC_expected_shortfall(self, sharesToSell):
         # Calculate the expected shortfall for the optimal strategy according to equation (20) of the AC paper
@@ -342,12 +337,7 @@ class HestonMertonEnvironment():
         fot = nft / dft
         ac_shortfall = ft + st + (tt * fot)
 
-        # Add expected fees
-        expected_trades = self.num_n
-        expected_fixed_fees = self.fee_fixed * expected_trades
-        expected_prop_fees = self.fee_prop * (sharesToSell * self.startingPrice)
-
-        return ac_shortfall + expected_fixed_fees + expected_prop_fees
+        return ac_shortfall 
  
         
     

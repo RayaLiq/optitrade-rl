@@ -107,11 +107,11 @@ def train_once(env_name: str, agent_name: str, reward_fn: str, act_method: str, 
         log.info(f"Starting SAC evaluation for {episodes} episodes...")
         for ep in trange(episodes, desc=f"Evaluating {agent_name}"):
             state, _ = env.reset(seed=seed + ep)
-            done, truncated, tot_r, episode_fees = False, False, 0.0, 0.0
-            while not (done or truncated):
+            done, tot_r, episode_fees = False, 0.0, 0.0
+            while not (done):
                 raw_action = agent.act(state, deterministic=True)
                 action = transform_action(raw_action, env, act_method)
-                state, reward, done, truncated, info = env.step(action)
+                state, reward, done, info = env.step(action)
                 tot_r += reward
                 if 'total_fees' in info:
                     episode_fees += info['total_fees']
@@ -124,12 +124,12 @@ def train_once(env_name: str, agent_name: str, reward_fn: str, act_method: str, 
         for ep in trange(episodes, desc=f"Training {agent_name}"):
             state = env.reset(seed=seed + ep)
             agent.reset()
-            done, truncated, tot_r, episode_fees = False, False, 0.0, 0.0
-            while not (done or truncated):
+            done, tot_r, episode_fees = False, 0.0, 0.0
+            while not (done):
                 raw_action = agent.act(state, add_noise=noiseflag)
                 action = transform_action(raw_action, env, act_method)
-                next_state, reward, done, truncated, info = env.step(action)
-                agent.step(state, action, reward, next_state, (done or truncated))
+                next_state, reward, done, info = env.step(action)
+                agent.step(state, action, reward, next_state, done)
                 tot_r += reward
                 state = next_state
                 if 'total_fees' in info:

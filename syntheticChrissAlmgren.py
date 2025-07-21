@@ -36,7 +36,8 @@ class MarketEnvironment():
                  lqd_time = LIQUIDATION_TIME,
                  num_tr = NUM_N,
                  lambd = LLAMBDA,
-                 reward_fn="ac_utility"):
+                 reward_fn="ac_utility",
+                 state_size=6):
         
         # Set the random seed
         random.seed(randomSeed)
@@ -67,7 +68,10 @@ class MarketEnvironment():
         # Set the variables for the initial state
         self.shares_remaining = self.total_shares
         self.timeHorizon = self.num_n
-        self.logReturns = collections.deque(np.zeros(6))
+
+        self.state_size = state_size
+
+        self.logReturns = collections.deque(np.zeros(self.state_size))
         
         # Set the initial impacted price to the starting price
         self.prevImpactedPrice = self.startingPrice
@@ -84,12 +88,13 @@ class MarketEnvironment():
         
         # Set a reward function
         self.reward_function = REWARD_FN_MAP[reward_fn]
+
         
         
     def reset(self, seed = 0, reward_fn=None, liquid_time = LIQUIDATION_TIME, num_trades = NUM_N, lamb = LLAMBDA):
         
         # Initialize the environment with the given parameters
-        self.__init__(randomSeed = seed, lqd_time = liquid_time, num_tr = num_trades, lambd = lamb)
+        self.__init__(randomSeed = seed, lqd_time = liquid_time, num_tr = num_trades, lambd = lamb, state_size=self.state_size)
         
         # Set the initial state to [0,0,0,0,0,0,1,1]
         self.initial_state = np.array(list(self.logReturns) + [self.timeHorizon / self.num_n, \
@@ -284,7 +289,7 @@ class MarketEnvironment():
         
     def observation_space_dimension(self):
         # Return the dimension of the state
-        return 8
+        return self.state_size + 2
     
     
     def action_space_dimension(self):

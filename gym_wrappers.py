@@ -1,8 +1,10 @@
-# gym_wrappers.py – thin Gymnasium adapter for MarketEnvironment
+# gym_wrappers.py – thin Gymnasium adapter for MarketEnvironment and GBMMarketEnvironment
 # -------------------------------------------------------------
 # Usage:
 #    from gym_wrappers import ACTradingGym
-#    env = ACTradingGym(reward_name="ac_utility", seed=123)
+#    env = ACTradingGym(env_type="ac", reward_name="ac_utility", seed=123)
+#    or
+#    env = ACTradingGym(env_type="gbm", reward_name="ac_utility", seed=123)
 #    obs, _ = env.reset()
 #    obs, r, terminated, truncated, info = env.step(env.action_space.sample())
 #
@@ -15,29 +17,68 @@ import gymnasium as gym
 import numpy as np
 from typing import Any, Tuple
 
-from syntheticChrissAlmgren_extended import MarketEnvironment
+from syntheticChrissAlmgren import MarketEnvironment
+from GBM import GBMMarketEnvironment
+from Hetson_Merton_Env import HestonMertonEnvironment
+from Hetson_Merton_fees import HestonMertonFeesEnvironment
 
 class ACTradingGym(gym.Env):
-    """Gym‑style wrapper around the Almgren‑Chriss MarketEnvironment.
+    """Gym-style wrapper around different trading environments.
 
-    Observation: 1‑D float32 vector (len=8)  – last 5 log‑returns + timeFrac + invFrac
-    Action:      Box(0,1, (1,)) – fraction of remaining inventory to sell this step.
-    Reward:      supplied by MarketEnvironment via rewards.REWARD_FN_MAP.
+    Supports:
+    - Almgren-Chriss MarketEnvironment (env_type="ac")
+    - GBM MarketEnvironment (env_type="gbm")
+
+    Observation: 1-D float32 vector (length depends on environment)
+    Action:      Box(0,1, (1,)) – fraction of remaining inventory to sell this step.
+    Reward:      supplied by the underlying environment
     """
 
     metadata = {"render_modes": []}
 
-    def __init__(self, reward_name: str = "ac_utility", seed: int = 0,
+    def __init__(self, env_type: str = "ac", reward_name: str = "ac_utility", seed: int = 0,
                  liquid_time: int = 60, num_trades: int = 60, lamb: float = 1e-6):
         super().__init__()
-        self._ac_env = MarketEnvironment(randomSeed=seed,
-                                          lqd_time=liquid_time,
-                                          num_tr=num_trades,
-                                          lambd=lamb)
+        self.env_type = env_type
         self.reward_name = reward_name
 
+        # Initialize the appropriate environment
+        if env_type == "ac":
+            self._ac_env = MarketEnvironment(
+                randomSeed=seed,
+                lqd_time=liquid_time,
+                num_tr=num_trades,
+                lambd=lamb
+            )
+        elif env_type == "gbm":
+            self._ac_env = GBMMarketEnvironment(
+                randomSeed=seed,
+                lqd_time=liquid_time,
+                num_tr=num_trades,
+                lambd=lamb
+            )
+        elif env_type == "hm":
+            self._ac_env = HestonMertonEnvironment(
+                randomSeed=seed,
+                lqd_time=liquid_time,
+                num_tr=num_trades,
+                lambd=lamb
+            )
+        elif env_type == "hmf":
+            self._ac_env = HestonMertonFeesEnvironment(
+                randomSeed=seed,
+                lqd_time=liquid_time,
+                num_tr=num_trades,
+                lambd=lamb
+            )
+
+
+
+        else:
+            raise ValueError(f"Unknown environment type: {env_type}")
+
         # ----- Gym spaces -----
-        self.action_space      = gym.spaces.Box(low=0.0, high=1.0, shape=(1,), dtype=np.float32)
+        self.action_space = gym.spaces.Box(low=0.0, high=1.0, shape=(1,), dtype=np.float32)
         obs_dim = self._ac_env.observation_space_dimension()
         self.observation_space = gym.spaces.Box(low=-np.inf, high=np.inf, shape=(obs_dim,), dtype=np.float32)
 
@@ -57,7 +98,12 @@ class ACTradingGym(gym.Env):
         return obs.astype(np.float32), {}
 
     def step(self, action: np.ndarray | float):
-        obs, reward, done, info = self._ac_env.step(float(action), reward_function=self.reward_name)
+        # Handle both environments' step methods
+        if self.env_type == "ac":
+            obs, reward, done, info = self._ac_env.step(float(action), reward_function=self.reward_name)
+        else:  # gbm
+            obs, reward, done, info = self._ac_env.step(float(action))
+            
         self._steps += 1
         terminated, truncated = done, False  # no truncation logic yet
         return obs.astype(np.float32), float(reward), terminated, truncated, {
@@ -66,7 +112,7 @@ class ACTradingGym(gym.Env):
         }
 
     # ------------------------------------------------------------------
-    # Helpers – not strictly required by Gym, but nice to have
+    # Helpers – not strictly required by Gym, but nice to have
     # ------------------------------------------------------------------
     def render(self):
         pass  # could print remaining shares / price

@@ -1,7 +1,7 @@
 import seaborn as sns
 import matplotlib.pyplot as plt
 import inspect
-
+import gym
 from pathlib import Path
 from typing import List
 import argparse

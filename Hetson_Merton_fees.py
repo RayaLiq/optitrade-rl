@@ -2,6 +2,7 @@ from logging import info
 import random
 import numpy as np
 import collections
+from rewards import REWARD_FN_MAP
 
 # ------------------------------------------------ Financial Parameters --------------------------------------------------- #
 
@@ -58,6 +59,7 @@ class HestonMertonFeesEnvironment():
                  lqd_time = LIQUIDATION_TIME,
                  num_tr = NUM_N,
                  lambd = LLAMBDA,
+                 reward_fn="ac_utility",
                  fee_config=None):
         
         # Set the random seed
@@ -115,6 +117,8 @@ class HestonMertonFeesEnvironment():
         # Set a variable to keep trak of the trade number
         self.k = 0
 
+        self.reward_function = REWARD_FN_MAP[reward_fn]
+
         # Initialize Heston parameters
         self.heston_kappa = HESTON_KAPPA
         self.heston_theta = HESTON_THETA
@@ -142,6 +146,8 @@ class HestonMertonFeesEnvironment():
                                                                np.log(self.current_variance) if self.current_variance > 0 else -10,  # Log variance 
                                                                1 if (self.jump_lambda > 0 and random.random() < 0.05) else 0  # Jump indicator 
                                                                ])
+
+        self.reward_function = REWARD_FN_MAP[reward_fn]                                                      
 
         return self.initial_state
 
@@ -296,22 +302,17 @@ class HestonMertonFeesEnvironment():
             self.prevPrice = info.price
             self.prevImpactedPrice = info.price - info.currentPermanentImpact
             
-            # Calculate incremental implementation shortfall improvement
-            current_value = self.shares_remaining * self.startingPrice
-            new_value = self.shares_remaining * info.price
-            if reward_function == "final_shortfall" and info.done:
-                reward = -info.implementation_shortfall / (self.total_shares * self.startingPrice)
-            elif reward_function == "stepwise_profit":
-                reward = (current_value - new_value) / self.startingPrice
-            elif reward_function == "fees_penalty":
-                reward = -info.total_fees / self.total_shares
-            elif reward_function == "hybrid":
-                reward = (current_value - new_value) / self.startingPrice - 0.00001 * info.total_fees
-            else:
-                reward = (current_value - new_value) / self.startingPrice
+            # Calculate the reward
+            reward = self.reward_function(self, info, action)
 
-
-
+            # If all the shares have been sold calculate E, V, and U, and give a positive reward.
+            if self.shares_remaining <= 0:
+                
+                # Calculate the implementation shortfall
+                info.implementation_shortfall  = self.total_shares * self.startingPrice - self.totalCapture
+                   
+                # Set the done flag to True. This indicates that we have sold all the shares
+                info.done = True
         else:
             reward = 0.0
         

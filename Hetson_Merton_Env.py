@@ -2,6 +2,7 @@ from logging import info
 import random
 import numpy as np
 import collections
+from rewards import REWARD_FN_MAP
 
 
 # ------------------------------------------------ Financial Parameters --------------------------------------------------- #
@@ -57,7 +58,7 @@ class HestonMertonEnvironment():
              lqd_time=LIQUIDATION_TIME,
              num_tr=NUM_N,
              lambd=LLAMBDA,
-             fee_config=None):
+             reward_fn="ac_utility"):
 
         
         # Set the random seed
@@ -109,6 +110,9 @@ class HestonMertonEnvironment():
         # Set a variable to keep trak of the trade number
         self.k = 0
 
+        # Set a reward function
+        self.reward_function = REWARD_FN_MAP[reward_fn]
+
         # Initialize Heston parameters
         self.heston_kappa = HESTON_KAPPA
         self.heston_theta = HESTON_THETA
@@ -130,7 +134,7 @@ class HestonMertonEnvironment():
 
         
         
-    def reset(self, seed = 0, liquid_time = LIQUIDATION_TIME, num_trades = NUM_N, lamb = LLAMBDA):
+    def reset(self, seed = 0, reward_fn = None, liquid_time = LIQUIDATION_TIME, num_trades = NUM_N, lamb = LLAMBDA):
         
         
         # Initialize the environment with the given parameters
@@ -142,6 +146,8 @@ class HestonMertonEnvironment():
                                                                np.log(self.current_variance) if self.current_variance > 0 else -10,  # Log variance 
                                                                1 if (self.jump_lambda > 0 and random.random() < 0.05) else 0  # Jump indicator 
                                                                ])
+        if reward_fn is not None:
+            self.reward_function = REWARD_FN_MAP[reward_fn]
 
         return self.initial_state
 
@@ -278,14 +284,17 @@ class HestonMertonEnvironment():
             self.prevPrice = info.price
             self.prevImpactedPrice = info.price - info.currentPermanentImpact
             
-
-
-            # Calculate incremental implementation shortfall improvement
-            current_value = self.shares_remaining * self.startingPrice
-            new_value = self.shares_remaining * info.price
-            reward = (current_value - new_value) / self.startingPrice
-
-
+            # Calculate the reward
+            reward = self.reward_function(self, info, action)
+            
+            # If all the shares have been sold calculate E, V, and U, and give a positive reward.
+            if self.shares_remaining <= 0:
+                
+                # Calculate the implementation shortfall
+                info.implementation_shortfall  = self.total_shares * self.startingPrice - self.totalCapture
+                   
+                # Set the done flag to True. This indicates that we have sold all the shares
+                info.done = True
         else:
             reward = 0.0
         

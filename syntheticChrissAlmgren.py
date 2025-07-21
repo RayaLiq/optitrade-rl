@@ -81,6 +81,7 @@ class MarketEnvironment():
                            
         # Set a variable to keep trak of the trade number
         self.k = 0
+        
         # Set a reward function
         self.reward_function = REWARD_FN_MAP[reward_fn]
         

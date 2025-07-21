@@ -40,7 +40,7 @@ class ACTradingGym(gym.Env):
                  liquid_time: int = 60, num_trades: int = 60, lamb: float = 1e-6):
         super().__init__()
         self.env_type = env_type
-
+        self.reward_fn = reward_fn 
         # Initialize the appropriate environment
         if env_type == "ac":
             self._ac_env = MarketEnvironment(

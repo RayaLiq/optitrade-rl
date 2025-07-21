@@ -36,11 +36,10 @@ class ACTradingGym(gym.Env):
 
     metadata = {"render_modes": []}
 
-    def __init__(self, env_type: str = "ac", reward_name: str = "ac_utility", seed: int = 0,
+    def __init__(self, env_type: str = "ac", reward_fn: str = "ac_utility", seed: int = 0,
                  liquid_time: int = 60, num_trades: int = 60, lamb: float = 1e-6):
         super().__init__()
         self.env_type = env_type
-        self.reward_name = reward_name
 
         # Initialize the appropriate environment
         if env_type == "ac":
@@ -48,28 +47,32 @@ class ACTradingGym(gym.Env):
                 randomSeed=seed,
                 lqd_time=liquid_time,
                 num_tr=num_trades,
-                lambd=lamb
+                lambd=lamb,
+                reward_fn= reward_fn
             )
         elif env_type == "gbm":
             self._ac_env = GBMMarketEnvironment(
                 randomSeed=seed,
                 lqd_time=liquid_time,
                 num_tr=num_trades,
-                lambd=lamb
+                lambd=lamb,
+                reward_fn= reward_fn
             )
         elif env_type == "hm":
             self._ac_env = HestonMertonEnvironment(
                 randomSeed=seed,
                 lqd_time=liquid_time,
                 num_tr=num_trades,
-                lambd=lamb
+                lambd=lamb,
+                reward_fn= reward_fn
             )
         elif env_type == "hmf":
             self._ac_env = HestonMertonFeesEnvironment(
                 randomSeed=seed,
                 lqd_time=liquid_time,
                 num_tr=num_trades,
-                lambd=lamb
+                lambd=lamb,
+                reward_fn= reward_fn
             )
 
 

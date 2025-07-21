@@ -132,6 +132,7 @@ def train_once(env_name: str, agent_name: str, reward_fn: str, act_method: str, 
                 agent.step(state, action, reward, next_state, done)
                 tot_r += reward
                 state = next_state
+                print(info)
                 if 'total_fees' in info:
                     episode_fees += info['total_fees']
             rewards.append(tot_r)

@@ -111,8 +111,7 @@ def train_once(env_name: str, agent_name: str, reward_fn: str, act_method: str, 
                 action = transform_action(raw_action, env, act_method)
                 state, reward, done, info = env.step(action)
                 tot_r += reward
-                if 'total_fees' in info:
-                    episode_fees += info['total_fees']
+
             rewards.append(tot_r)
             shortfalls.append(info.get("impl_shortfall", np.nan))
             fee_data.append(episode_fees)
@@ -131,8 +130,6 @@ def train_once(env_name: str, agent_name: str, reward_fn: str, act_method: str, 
                 tot_r += reward
                 state = next_state
                 
-                if 'total_fees' in info:
-                    episode_fees += info['total_fees']
             rewards.append(tot_r)
             shortfalls.append(info.get("impl_shortfall", np.nan))
             fee_data.append(episode_fees)
@@ -162,11 +159,11 @@ def run_action_transform_test(transform_methods: List[str], seed_count: int, out
             env = make_env(env_name, "ac_utility", seed)
             agent = DDPGAgent(state_size=env.observation_space.shape[0], action_size=1, random_seed=seed)
             state, _ = env.reset(seed=seed)
-            done, truncated = False, False
-            while not (done or truncated):
+            done= False
+            while not done:
                 raw_action = agent.act(state, add_noise=False)
                 action = transform_action(raw_action, env._ac_env, method)
-                state, _, done, truncated, info = env.step(action)
+                state, _, done, info = env.step(action)
             shortfalls.append(info.get("impl_shortfall", np.nan))
         results[method] = {'mean_shortfall': np.nanmean(shortfalls), 'std_shortfall': np.nanstd(shortfalls)}
     output_dir.mkdir(parents=True, exist_ok=True)

@@ -244,6 +244,7 @@ def main(argv: List[str] | None = None):
                    help="Action transform(s) for single-run mode")
     p.add_argument("--compare-action", nargs="*",
                    help="Batch compare action transforms (use 'all' for every method)")
+    p.add_argument("--plot-y-axis", default="shortfall", choices=["shortfall", "reward"], help="Y-axis for training curve plots")
 
     # Fee configuration arguments
     p.add_argument("--fee-fixed", type=float, default=10.0, help="Fixed fee per trade")

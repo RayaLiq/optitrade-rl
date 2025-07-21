@@ -332,7 +332,6 @@ def main(argv: List[str] | None = None):
         noiseflag=not args.no_noise,
         fee_config=fee_config,
         agent_kwargs=agent_kwargs,
-        env_kwargs=env_kwargs
     )
     
     logger.info(f"Training completed. Mean shortfall: ${mean_shortfall:,.2f} ± ${std_shortfall:,.2f}")

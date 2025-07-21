@@ -1,5 +1,5 @@
 import numpy as np
-from syntheticAlmgrenChriss import MarketEnvironment
+from syntheticChrissAlmgren import MarketEnvironment
 from runner import train_once
 from pathlib import Path
 import pandas as pd

@@ -100,9 +100,9 @@ class ACTradingGym(gym.Env):
     def step(self, action: np.ndarray | float):
         # Handle both environments' step methods
         if self.env_type == "ac":
-            obs, reward, done, info = self._ac_env.step(float(action), reward_fn=self.reward_name)
+            obs, reward, done, info = self._ac_env.step(float(action))
         else:  # gbm
-            obs, reward, done, info = self._ac_env.step(float(action), reward_fn=self.reward_name)
+            obs, reward, done, info = self._ac_env.step(float(action))
             
         self._steps += 1
         terminated, truncated = done, False  # no truncation logic yet

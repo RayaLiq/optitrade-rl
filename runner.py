@@ -118,10 +118,6 @@ def train_once(
 ) -> Tuple[float, float, float, float, list, Any]:
     """Main training function for Heston-Merton with fees without specialized plots."""
     log = logging.getLogger(f"{agent_name}|{reward_fn}|{act_method}")
-    if agent_kwargs is None:
-        agent_kwargs = {}
-    if env_kwargs is None:
-        env_kwargs = {}
     
     # Create environment
     env = make_env(env_name, reward_fn, seed, fee_config)

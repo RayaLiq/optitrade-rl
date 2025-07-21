@@ -125,17 +125,17 @@ def train_once(
     agent_kwargs: dict = None,
     env_kwargs: dict = None
 ) -> Tuple[float, float, float, float, list, Any]:
-    """Main training function with enhancements for Heston-Merton with fees."""
+    """Main training function for Heston-Merton with fees without specialized plots."""
     log = logging.getLogger(f"{agent_name}|{reward_fn}|{act_method}")
     if agent_kwargs is None:
         agent_kwargs = {}
     if env_kwargs is None:
         env_kwargs = {}
     
-    # Create environment with potential Heston-Merton parameters
+    # Create environment
     env = make_env(env_name, reward_fn, seed, fee_config, **env_kwargs)
     
-    # Create agent - handle different state size for Heston-Merton
+    # Create agent
     state_size = None
     if hasattr(env, 'observation_space_dimension'):
         state_size = env.observation_space_dimension()
@@ -144,24 +144,20 @@ def train_once(
         env, 
         seed, 
         state_size=state_size,
-        action_size=1,  # All our environments have 1D actions
+        action_size=1,
         **agent_kwargs
     )
     
-    rewards, shortfalls, utilities, fee_data, vol_paths, price_paths = [], [], [], [], [], []
+    rewards, shortfalls, utilities, fee_data = [], [], [], []
 
-    # For DDPG-style agents
+    # Training loop for DDPG
     if agent_name.lower() == "ddpg":
         log.info(f"Starting DDPG training for {episodes} episodes...")
         for ep in trange(episodes, desc=f"Training {agent_name}"):
             state = env.reset(seed=seed + ep)
             agent.reset()
             done, tot_r = False, 0.0
-            ep_trades = []  # Track trades in this episode
-            ep_vol = []     # Track volatility path
-            ep_prices = []  # Track price path
             
-            # Start transactions explicitly for Heston-Merton
             if hasattr(env, 'start_transactions'):
                 env.start_transactions()
             
@@ -169,71 +165,24 @@ def train_once(
                 raw_action = agent.act(state, add_noise=noiseflag)
                 action = transform_action(raw_action, env, act_method)
                 next_state, reward_arr, done, info = env.step(action)
-                reward_val = reward_arr[0]  # Unpack scalar from array
+                reward_val = reward_arr[0]
                 
                 agent.step(state, action, reward_val, next_state, done)
                 tot_r += reward_val
                 state = next_state
-                
-                # Record trade details
-                if hasattr(info, 'share_to_sell_now'):
-                    ep_trades.append(info.share_to_sell_now)
-                
-                # Record volatility and price
-                if hasattr(env, 'current_variance'):
-                    ep_vol.append(np.sqrt(env.current_variance))
-                if hasattr(info, 'price'):
-                    ep_prices.append(info.price)
             
             rewards.append(tot_r)
             
-            # Handle completion info
+            # Record metrics
             if hasattr(info, 'implementation_shortfall'):
                 shortfalls.append(info.implementation_shortfall)
             if hasattr(info, 'utility'):
                 utilities.append(info.utility)
             if hasattr(info, 'total_fees'):
                 fee_data.append(info.total_fees)
-            
-            # Record paths for visualization
-            vol_paths.append(ep_vol)
-            price_paths.append(ep_prices)
-            
-            # Save trade list for analysis
-            trade_df = pd.DataFrame({
-                'step': range(len(ep_trades)),
-                'shares': ep_trades
-            })
-            trade_path = csv_dir / f"trades_ep{ep}_{agent_name}_{reward_fn}_{act_method}.csv"
-            trade_df.to_csv(trade_path, index=False)
-            
-            # Visualize first episode
-            if ep == 0:
-                # Plot trades
-                plot_trade_list(
-                    ep_trades, 
-                    optimal_trades=env.get_trade_list() if hasattr(env, 'get_trade_list') else None,
-                    file_path=csv_dir / f"{agent_name}_{reward_fn}_{act_method}_ep0_trades.png"
-                )
-                
-                # Plot volatility path
-                if ep_vol:
-                    plot_volatility_path(
-                        ep_vol,
-                        file_path=csv_dir / f"{agent_name}_{reward_fn}_{act_method}_ep0_volatility.png"
-                    )
-                
-                # Plot price path
-                if ep_prices:
-                    plot_price_path(
-                        ep_prices,
-                        trades=ep_trades,
-                        file_path=csv_dir / f"{agent_name}_{reward_fn}_{act_method}_ep0_price.png"
-                    )
 
-    # For SAC/TD3 agents
+    # Training loop for SAC/TD3
     elif agent_name.lower() in ["sac", "td3"]:
-        # Calculate total timesteps (number of trades per episode times episodes)
         timesteps_per_episode = env.num_n if hasattr(env, 'num_n') else 100
         total_timesteps = episodes * timesteps_per_episode
         log.info(f"Starting {agent_name} training for {total_timesteps} timesteps...")
@@ -243,9 +192,6 @@ def train_once(
         for ep in trange(episodes, desc=f"Evaluating {agent_name}"):
             state = env.reset(seed=seed + ep)
             done, tot_r = False, 0.0
-            ep_trades = []
-            ep_vol = []
-            ep_prices = []
             
             if hasattr(env, 'start_transactions'):
                 env.start_transactions()
@@ -256,13 +202,6 @@ def train_once(
                 state, reward_arr, done, info = env.step(action)
                 reward_val = reward_arr[0]
                 tot_r += reward_val
-                
-                if hasattr(info, 'share_to_sell_now'):
-                    ep_trades.append(info.share_to_sell_now)
-                if hasattr(env, 'current_variance'):
-                    ep_vol.append(np.sqrt(env.current_variance))
-                if hasattr(info, 'price'):
-                    ep_prices.append(info.price)
             
             rewards.append(tot_r)
             if hasattr(info, 'implementation_shortfall'):
@@ -271,27 +210,6 @@ def train_once(
                 utilities.append(info.utility)
             if hasattr(info, 'total_fees'):
                 fee_data.append(info.total_fees)
-            
-            vol_paths.append(ep_vol)
-            price_paths.append(ep_prices)
-            
-            if ep == 0:
-                plot_trade_list(
-                    ep_trades, 
-                    optimal_trades=env.get_trade_list() if hasattr(env, 'get_trade_list') else None,
-                    file_path=csv_dir / f"{agent_name}_{reward_fn}_{act_method}_ep0_trades.png"
-                )
-                if ep_vol:
-                    plot_volatility_path(
-                        ep_vol,
-                        file_path=csv_dir / f"{agent_name}_{reward_fn}_{act_method}_ep0_volatility.png"
-                    )
-                if ep_prices:
-                    plot_price_path(
-                        ep_prices,
-                        trades=ep_trades,
-                        file_path=csv_dir / f"{agent_name}_{reward_fn}_{act_method}_ep0_price.png"
-                    )
 
     # Save results
     csv_dir.mkdir(parents=True, exist_ok=True)
@@ -309,34 +227,7 @@ def train_once(
     if fee_data:
         results["total_fees"] = fee_data
         
-    results_df = pd.DataFrame(results)
-    results_df.to_csv(csv_dir / f"{file_tag}.csv", index=False)
-    
-    # Save paths for later analysis
-    if vol_paths:
-        vol_df = pd.DataFrame(vol_paths).T
-        vol_df.to_csv(csv_dir / f"{file_tag}_volatility_paths.csv", index=False)
-    
-    if price_paths:
-        price_df = pd.DataFrame(price_paths).T
-        price_df.to_csv(csv_dir / f"{file_tag}_price_paths.csv", index=False)
-    
-    # Generate plots
-    plot_file_path = csv_dir / f"{file_tag}_performance.png"
-    plot_training_performance(rewards, shortfalls, utilities, fee_data, window_size=100, file_path=plot_file_path)
-
-    # Plot fee impact analysis
-    if fee_data:
-        plot_fee_impact(
-            shortfalls, 
-            fee_data,
-            file_path=csv_dir / f"{file_tag}_fee_impact.png"
-        )
-    
-    # Plot losses for DDPG
-    if agent_name.lower() == "ddpg":
-        loss_file_path = csv_dir / f"{file_tag}_losses.png"
-        plot_training_losses(agent, window_size=100, file_path=loss_file_path)
+    pd.DataFrame(results).to_csv(csv_dir / f"{file_tag}.csv", index=False)
     
     return (
         np.mean(rewards) if rewards else 0,
@@ -354,10 +245,9 @@ def main(argv: List[str] | None = None):
     p.add_argument("--reward", default="ac_utility", help="Reward function")
     p.add_argument("--action", default="linear", help="Action transform method")
     p.add_argument("--episodes", type=int, default=1000, help="Number of training episodes")
-    p.add_argument("--seed", type=int, default=0, help="Random seed")
-    p.add_argument("--csv-dir", default="results/ChrissAlmgren", help="Output directory for results")
+    p.add_argument("--seed", type=int, default=42, help="Random seed")
+    p.add_argument("--csv-dir", default="results/heston_merton", help="Output directory for results")
     p.add_argument("--no-noise", action="store_true", help="Disable exploration noise")
-    p.add_argument("--plot", action="store_true", help="Generate plots")
     
     # Heston-Merton specific parameters
     p.add_argument("--total-shares", type=int, default=1000000, help="Total shares to liquidate")
@@ -417,8 +307,7 @@ def main(argv: List[str] | None = None):
         "heston_v0": args.heston_v0,
         "jump_lambda": args.jump_lambda,
         "jump_mu": args.jump_mu,
-        "jump_sigma": args.jump_sigma,
-        "llambda": args.llambda
+        "jump_sigma": args.jump_sigma
     }
     
     # Prepare agent parameters

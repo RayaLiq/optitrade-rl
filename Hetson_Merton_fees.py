@@ -134,7 +134,7 @@ class HestonMertonFeesEnvironment():
         self.current_variance = HESTON_V0  # Reset variance
         
         
-    def reset(self, seed = 0, liquid_time = LIQUIDATION_TIME, num_trades = NUM_N, lamb = LLAMBDA):
+    def reset(self, seed = 0, reward_fn="ac_utility", liquid_time = LIQUIDATION_TIME, num_trades = NUM_N, lamb = LLAMBDA):
         
         
         # Initialize the environment with the given parameters

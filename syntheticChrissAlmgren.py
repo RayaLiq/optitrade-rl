@@ -161,7 +161,7 @@ class MarketEnvironment():
 
             # Convert the action to the number of shares to sell in the current step
             sharesToSellNow = self.shares_remaining * action
-#             sharesToSellNow = min(self.shares_remaining * action, self.shares_remaining)
+            #sharesToSellNow = min(self.shares_remaining * action, self.shares_remaining)
     
             if self.timeHorizon < 2:
                 sharesToSellNow = self.shares_remaining

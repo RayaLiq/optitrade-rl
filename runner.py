@@ -179,8 +179,6 @@ def run_action_transform_test(transform_methods: List[str], seed_count: int, out
     plt.savefig(output_dir / "action_transform_plot.png")
     plt.close()
 
-
-
 def main(argv: List[str] | None = None):
     p = argparse.ArgumentParser("runner")
     p.add_argument("--agent", default="ddpg", help="agent name or module:Class")

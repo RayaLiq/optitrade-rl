@@ -71,7 +71,6 @@ def make_agent(
     seed: int, 
     state_size: Optional[int] = None,
     action_size: Optional[int] = None,
-    **kwargs
 ):
     """Factory function to create agents with support for Heston-Merton state size."""
     agent_name_lower = agent_name.lower()
@@ -92,18 +91,16 @@ def make_agent(
         return DDPGAgent(
             state_size=state_size, 
             action_size=action_size, 
-            random_seed=seed,
-            **kwargs
+            random_seed=seed
         )
     elif agent_name_lower == "sac" and SB3SACAgent is not None:
-        return SB3SACAgent(env=env, seed=seed, **kwargs)
+        return SB3SACAgent(env=env, seed=seed)
     elif agent_name_lower == "td3" and TD3Agent is not None:
         return TD3Agent(
             state_size=state_size, 
             action_size=action_size, 
             random_seed=seed, 
-            env=env, 
-            **kwargs
+            env=env
         )
     else:
         raise ValueError(f"Unknown agent '{agent_name}'. Use 'ddpg', 'sac', or 'td3'.")
@@ -118,8 +115,6 @@ def train_once(
     csv_dir: Path, 
     noiseflag: bool = True, 
     fee_config: dict = None,
-    agent_kwargs: dict = None,
-    env_kwargs: dict = None
 ) -> Tuple[float, float, float, float, list, Any]:
     """Main training function for Heston-Merton with fees without specialized plots."""
     log = logging.getLogger(f"{agent_name}|{reward_fn}|{act_method}")
@@ -140,8 +135,7 @@ def train_once(
         env, 
         seed, 
         state_size=state_size,
-        action_size=1,
-        **agent_kwargs
+        action_size=1
     )
     
     rewards, shortfalls, utilities, fee_data = [], [], [], []
@@ -306,13 +300,6 @@ def main(argv: List[str] | None = None):
         "jump_sigma": args.jump_sigma
     }"""
     
-    # Prepare agent parameters
-    agent_kwargs = {
-        "actor_lr": args.actor_lr,
-        "critic_lr": args.critic_lr,
-        "tau": args.tau,
-        "gamma": args.gamma
-    }
     
     # Run training
     logger.info("Starting training with configuration:")
@@ -331,7 +318,6 @@ def main(argv: List[str] | None = None):
         csv_dir=csv_dir,
         noiseflag=not args.no_noise,
         fee_config=fee_config,
-        agent_kwargs=agent_kwargs,
     )
     
     logger.info(f"Training completed. Mean shortfall: ${mean_shortfall:,.2f} ± ${std_shortfall:,.2f}")

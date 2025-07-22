@@ -60,9 +60,6 @@ def save_results(agent_name, env_name, reward_func, action_strategy, avg_impleme
         'timestamp': [datetime.now().strftime('%Y-%m-%d %H:%M:%S')]
     }
 
-    # ... fee handling remains unchanged ...
-    df.to_csv(filename, mode='a', header=not file_exists, index=False)
-
     # Add fee parameters if they exist
     if fixed_fee is not None:
         data['fixed_fee'] = [fixed_fee]

@@ -11,7 +11,11 @@ def _step_shortfall(env, info, action=None) -> float:
 
 def ac_utility(env, info, action=None):
     """Dense utility delta from Almgren‑Chriss."""
-    return (abs(env.prevUtility) - abs(env.compute_AC_utility(env.shares_remaining))) / abs(env.prevUtility)
+
+    currentUtility = env.compute_AC_utility(env.shares_remaining)
+    reward = (abs(env.prevUtility) - abs(currentUtility)) / abs(env.prevUtility)
+    env.prevUtility = currentUtility
+    return reward
 
 
 def capture(env, info, action=None):

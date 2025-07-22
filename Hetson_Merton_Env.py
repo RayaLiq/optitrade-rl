@@ -1,4 +1,3 @@
-from logging import info
 import random
 import numpy as np
 import collections
@@ -19,8 +18,8 @@ DAILY_VOLAT = ANNUAL_VOLAT / np.sqrt(TRAD_DAYS)    # Daily volatility in stock p
 TOTAL_SHARES = 1000000                                               # Total number of shares to sell
 STARTING_PRICE = 50                                                  # Starting price per share
 LLAMBDA = 1e-6                                                       # Trader's risk aversion
-LIQUIDATION_TIME = 120                                                # How many days to sell all the shares. 
-NUM_N = 120                                                           # Number of trades
+LIQUIDATION_TIME = 60                                                # How many days to sell all the shares. 
+NUM_N = 60                                                           # Number of trades
 EPSILON = BID_ASK_SP / 2                                             # Fixed Cost of Selling.
 SINGLE_STEP_VARIANCE = (DAILY_VOLAT  * STARTING_PRICE) ** 2          # Calculate single step variance
 ETA = BID_ASK_SP / (0.01 * DAILY_TRADE_VOL)                          # Price Impact for Each 1% of Daily Volume Traded
@@ -52,14 +51,13 @@ MERTON_SIGMA_J = 0.1      # Jump size volatility
 
 # Simulation Environment
 
-class HestonMertonEnvironment():
+class HMMarketEnvironment():
     
-    def __init__(self, randomSeed=0,
-             lqd_time=LIQUIDATION_TIME,
-             num_tr=NUM_N,
-             lambd=LLAMBDA,
-             reward_fn="ac_utility"):
-
+    def __init__(self, randomSeed = 0,
+                 lqd_time = LIQUIDATION_TIME,
+                 num_tr = NUM_N,
+                 lambd = LLAMBDA,
+                 reward_fn="ac_utility"):
         
         # Set the random seed
         random.seed(randomSeed)
@@ -102,16 +100,13 @@ class HestonMertonEnvironment():
 
         # Set the initial transaction state to False
         self.transacting = False
-                 
-        # Set VWAP reward function variables             
-        self.cumulative_volume = 0
-        self.vwap_numerator = 0    
-                 
+        
         # Set a variable to keep trak of the trade number
         self.k = 0
 
         # Set a reward function
-        self.reward_function = REWARD_FN_MAP[reward_fn]
+        self.reward_fn_name = reward_fn  # Store reward function name
+        self.reward_function = REWARD_FN_MAP[reward_fn]        
 
         # Initialize Heston parameters
         self.heston_kappa = HESTON_KAPPA
@@ -124,15 +119,17 @@ class HestonMertonEnvironment():
         self.jump_lambda = MERTON_LAMBDA
         self.jump_mu = MERTON_MU_J
         self.jump_sigma = MERTON_SIGMA_J
-
-        self.current_variance = HESTON_V0  # Reset variance
-     
         
-    def reset(self, seed = 0, reward_fn = None, liquid_time = LIQUIDATION_TIME, num_trades = NUM_N, lamb = LLAMBDA):
+        # Set the VWAP reward function variables             
+        self.cumulative_volume = 0
+        self.vwap_numerator = 0
+        
+        
+    def reset(self, seed = 0, reward_fn=None, liquid_time = LIQUIDATION_TIME, num_trades = NUM_N, lamb = LLAMBDA):
         
         
         # Initialize the environment with the given parameters
-        self.__init__(randomSeed = seed, lqd_time = liquid_time, num_tr = num_trades, lambd = lamb)
+        self.__init__(randomSeed = seed, reward_fn = reward_fn or self.reward_fn_name, lqd_time = liquid_time, num_tr = num_trades, lambd = lamb)
         
         # Set the initial state to [0,0,0,0,0,0,1,1]
 
@@ -188,14 +185,7 @@ class HestonMertonEnvironment():
             self.transacting = False
             info.done = True
             info.implementation_shortfall = self.total_shares * self.startingPrice - self.totalCapture
-
-            info.total_fixed_fees = self.fee_fixed * (self.num_n - self.timeHorizon)
-            gross_trade_value = self.total_shares * self.startingPrice
-            info.total_proportional_fees = self.fee_prop * (gross_trade_value - self.totalCapture)
-            info.total_fees = info.total_fixed_fees + info.total_proportional_fees
-
             info.expected_shortfall = self.get_expected_shortfall(self.total_shares)
-
             info.expected_variance = self.singleStepVariance * self.tau * self.totalSRSQ
             info.utility = info.expected_shortfall + self.llambda * info.expected_variance
             
@@ -277,10 +267,10 @@ class HestonMertonEnvironment():
             self.timeHorizon -= 1
             self.prevPrice = info.price
             self.prevImpactedPrice = info.price - info.currentPermanentImpact
-            
+
             # Calculate the reward
             reward = self.reward_function(self, info, action)
-            
+
             # If all the shares have been sold calculate E, V, and U, and give a positive reward.
             if self.shares_remaining <= 0:
                 
@@ -289,6 +279,8 @@ class HestonMertonEnvironment():
                    
                 # Set the done flag to True. This indicates that we have sold all the shares
                 info.done = True
+
+
         else:
             reward = 0.0
         
@@ -320,25 +312,19 @@ class HestonMertonEnvironment():
         ft = 0.5 * self.gamma * (sharesToSell ** 2)        
         st = self.epsilon * sharesToSell
         tt = (self.eta_hat / self.tau) * self.totalSSSQ
+        return ft + st + tt
 
-        return ft + st + tt 
-
+    
     def get_AC_expected_shortfall(self, sharesToSell):
         # Calculate the expected shortfall for the optimal strategy according to equation (20) of the AC paper
         ft = 0.5 * self.gamma * (sharesToSell ** 2)        
         st = self.epsilon * sharesToSell        
-        tt = self.eta_hat * (sharesToSell ** 2)
-
-        nft = np.tanh(0.5 * self.kappa * self.tau) * (
-            self.tau * np.sinh(2 * self.kappa * self.liquidation_time)
-            + 2 * self.liquidation_time * np.sinh(self.kappa * self.tau)
-        )
-        dft = 2 * (self.tau ** 2) * (np.sinh(self.kappa * self.liquidation_time) ** 2)
-        fot = nft / dft
-        ac_shortfall = ft + st + (tt * fot)
-
-        return ac_shortfall 
- 
+        tt = self.eta_hat * (sharesToSell ** 2)       
+        nft = np.tanh(0.5 * self.kappa * self.tau) * (self.tau * np.sinh(2 * self.kappa * self.liquidation_time) \
+                                                      + 2 * self.liquidation_time * np.sinh(self.kappa * self.tau))       
+        dft = 2 * (self.tau ** 2) * (np.sinh(self.kappa * self.liquidation_time) ** 2)   
+        fot = nft / dft       
+        return ft + st + (tt * fot)  
         
     
     def get_AC_variance(self, sharesToSell):

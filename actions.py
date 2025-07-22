@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import numpy as np
-from typing import Callable, Dict
+from typing import Any, Callable, Dict
 
 def _identity(a, env):
     return np.clip(a, 0.0, 1.0)

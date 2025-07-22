@@ -532,7 +532,7 @@ def plot_training_performance(shortfall_history, window_size=100, figsize=(10, 6
     plt.show()    
 
 
-def plot_training_losses(agent, window_size=100, figsize=(12, 6), file_path=None):
+def plot_training_losses(agent, window_size=100, figsize=(12, 6)):
     """
     Plots actor and critic losses during training.
     
@@ -566,8 +566,4 @@ def plot_training_losses(agent, window_size=100, figsize=(12, 6), file_path=None
     plt.yscale('log')  # Log scale often works better for loss visualization
     plt.legend()
     plt.grid(True)
-
-    if file_path:
-        plt.savefig(file_path, bbox_inches='tight')
-
     plt.show()

@@ -75,13 +75,11 @@ class Agent():
         if add_noise:
             action += self.noise.sample()
         action = (action + 1.0) / 2.0
-        
+
         if transform_method:  
             action = transform_action(action, method=transform_method)
-        
-        return np.clip(action, 0, 1)
-        
 
+        return np.clip(action, 0, 1)
 
 
     def reset(self):
@@ -124,7 +122,7 @@ class Agent():
         actor_loss = -self.critic_local(states, actions_pred).mean()
 
         self.actor_losses.append(actor_loss.item())
-
+        
         # Minimize the loss
         self.actor_optimizer.zero_grad()
         actor_loss.backward()

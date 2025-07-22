@@ -4,7 +4,6 @@ import collections
 from rewards import REWARD_FN_MAP
 
 
-
 # ------------------------------------------------ Financial Parameters --------------------------------------------------- #
 
 ANNUAL_VOLAT = 0.12                                # Annual volatility in stock price
@@ -19,8 +18,8 @@ DAILY_VOLAT = ANNUAL_VOLAT / np.sqrt(TRAD_DAYS)    # Daily volatility in stock p
 TOTAL_SHARES = 1000000                                               # Total number of shares to sell
 STARTING_PRICE = 50                                                  # Starting price per share
 LLAMBDA = 1e-6                                                       # Trader's risk aversion
-LIQUIDATION_TIME = 120                                                # How many days to sell all the shares. 
-NUM_N = 120                                                           # Number of trades
+LIQUIDATION_TIME = 60                                                # How many days to sell all the shares. 
+NUM_N = 60                                                           # Number of trades
 EPSILON = BID_ASK_SP / 2                                             # Fixed Cost of Selling.
 SINGLE_STEP_VARIANCE = (DAILY_VOLAT  * STARTING_PRICE) ** 2          # Calculate single step variance
 ETA = BID_ASK_SP / (0.01 * DAILY_TRADE_VOL)                          # Price Impact for Each 1% of Daily Volume Traded
@@ -92,26 +91,28 @@ class GBMMarketEnvironment():
 
         # Set the initial transaction state to False
         self.transacting = False
-
-        # Set VWAP reward function variables             
-        self.cumulative_volume = 0
-        self.vwap_numerator = 0                                         
         
         # Set a variable to keep trak of the trade number
         self.k = 0
 
         # Set a reward function
+        self.reward_fn_name = reward_fn  # Store reward function name
         self.reward_function = REWARD_FN_MAP[reward_fn]
         
+        # Set the VWAP reward function variables             
+        self.cumulative_volume = 0
+        self.vwap_numerator = 0
         
+                
     def reset(self, seed = 0, reward_fn=None, liquid_time = LIQUIDATION_TIME, num_trades = NUM_N, lamb = LLAMBDA):
         
         # Initialize the environment with the given parameters
-        self.__init__(randomSeed = seed, lqd_time = liquid_time, num_tr = num_trades, lambd = lamb)
+        self.__init__(randomSeed = seed, reward_fn = reward_fn or self.reward_fn_name, lqd_time = liquid_time, num_tr = num_trades, lambd = lamb)
         
         # Set the initial state to [0,0,0,0,0,0,1,1]
         self.initial_state = np.array(list(self.logReturns) + [self.timeHorizon / self.num_n, \
                                                                self.shares_remaining / self.total_shares])
+
         if reward_fn is not None:
             self.reward_function = REWARD_FN_MAP[reward_fn]
 
@@ -214,12 +215,11 @@ class GBMMarketEnvironment():
             # Update the variables required for the next step
             self.timeHorizon -= 1
             self.prevPrice = info.price
-            self.prevImpactedPrice = info.price - info.currentPermanentImpact
-            
+            self.prevImpactedPrice = info.price - info.currentPermanentImpact     
 
             # Calculate the reward
             reward = self.reward_function(self, info, action)
-            
+
             # If all the shares have been sold calculate E, V, and U, and give a positive reward.
             if self.shares_remaining <= 0:
                 
@@ -228,6 +228,7 @@ class GBMMarketEnvironment():
                    
                 # Set the done flag to True. This indicates that we have sold all the shares
                 info.done = True
+
         else:
             reward = 0.0
         

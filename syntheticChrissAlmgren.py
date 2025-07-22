@@ -36,8 +36,7 @@ class MarketEnvironment():
                  lqd_time = LIQUIDATION_TIME,
                  num_tr = NUM_N,
                  lambd = LLAMBDA,
-                 reward_fn="ac_utility",
-                 state_size=6):
+                 reward_fn="ac_utility"):
         
         # Set the random seed
         random.seed(randomSeed)
@@ -68,39 +67,35 @@ class MarketEnvironment():
         # Set the variables for the initial state
         self.shares_remaining = self.total_shares
         self.timeHorizon = self.num_n
-
-        self.state_size = state_size
-
-        self.logReturns = collections.deque(np.zeros(self.state_size))
+        self.logReturns = collections.deque(np.zeros(6))
         
         # Set the initial impacted price to the starting price
         self.prevImpactedPrice = self.startingPrice
 
         # Set the initial transaction state to False
         self.transacting = False
-                     
+        
+        # Set a variable to keep trak of the trade number
+        self.k = 0
+
+        # Set a reward function
+        self.reward_fn_name = reward_fn  # Store reward function name
+        self.reward_function = REWARD_FN_MAP[reward_fn]     
+        
         # Set the VWAP reward function variables             
         self.cumulative_volume = 0
         self.vwap_numerator = 0
-                           
-        # Set a variable to keep trak of the trade number
-        self.k = 0
         
-        # Set a reward function
-        self.reward_function = REWARD_FN_MAP[reward_fn]
-
-        
-        
+                
     def reset(self, seed = 0, reward_fn=None, liquid_time = LIQUIDATION_TIME, num_trades = NUM_N, lamb = LLAMBDA):
         
         # Initialize the environment with the given parameters
-        self.__init__(randomSeed = seed, lqd_time = liquid_time, num_tr = num_trades, lambd = lamb, state_size=self.state_size)
+        self.__init__(randomSeed = seed, reward_fn = reward_fn or self.reward_fn_name, lqd_time = liquid_time, num_tr = num_trades, lambd = lamb)
         
         # Set the initial state to [0,0,0,0,0,0,1,1]
         self.initial_state = np.array(list(self.logReturns) + [self.timeHorizon / self.num_n, \
                                                                self.shares_remaining / self.total_shares])
-        if reward_fn is not None:
-            self.reward_function = REWARD_FN_MAP[reward_fn]
+
 
         return self.initial_state
 
@@ -289,7 +284,7 @@ class MarketEnvironment():
         
     def observation_space_dimension(self):
         # Return the dimension of the state
-        return self.state_size + 2
+        return 8
     
     
     def action_space_dimension(self):

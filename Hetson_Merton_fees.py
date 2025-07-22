@@ -1,8 +1,9 @@
-from logging import info
 import random
 import numpy as np
 import collections
 from rewards import REWARD_FN_MAP
+
+
 
 # ------------------------------------------------ Financial Parameters --------------------------------------------------- #
 
@@ -53,14 +54,15 @@ PROPORTIONAL_FEE_RATE = 0.001   # 0.1% fee on trade value
 
 # Simulation Environment
 
-class HestonMertonFeesEnvironment():
+class HMFMarketEnvironment():
     
     def __init__(self, randomSeed = 0,
                  lqd_time = LIQUIDATION_TIME,
                  num_tr = NUM_N,
                  lambd = LLAMBDA,
                  reward_fn="ac_utility",
-                 fee_config=None):
+                 fixed_fee=FIXED_FEE_PER_TRADE,  # Use the global constant as default
+                 proportional_fee=PROPORTIONAL_FEE_RATE):  # Use the global constant as default
         
         # Set the random seed
         random.seed(randomSeed)
@@ -81,12 +83,6 @@ class HestonMertonFeesEnvironment():
         self.singleStepVariance = SINGLE_STEP_VARIANCE
         self.eta = ETA
         self.gamma = GAMMA
-
-        # Fee parameters (default if not provided)
-        fee_config = fee_config or {}
-        self.fee_fixed = fee_config.get("fixed", 10.0)
-        self.fee_prop = fee_config.get("prop", 0.001)
-
 
         # Initialize the GBM parameters
         self.delta_t = DELTA_T
@@ -109,14 +105,12 @@ class HestonMertonFeesEnvironment():
 
         # Set the initial transaction state to False
         self.transacting = False
-                     
-        # Set VWAP reward function variables             
-        self.cumulative_volume = 0
-        self.vwap_numerator = 0    
-                     
+        
         # Set a variable to keep trak of the trade number
         self.k = 0
 
+        # Set a reward function
+        self.reward_fn_name = reward_fn  # Store reward function name
         self.reward_function = REWARD_FN_MAP[reward_fn]
 
         # Initialize Heston parameters
@@ -131,14 +125,23 @@ class HestonMertonFeesEnvironment():
         self.jump_mu = MERTON_MU_J
         self.jump_sigma = MERTON_SIGMA_J
 
-        self.current_variance = HESTON_V0  # Reset variance
+        # Fee parameters - these are the key additions
+        self.fixed_fee = fixed_fee
+        self.proportional_fee = proportional_fee
+                       
+        # Set the VWAP reward function variables             
+        self.cumulative_volume = 0
+        self.vwap_numerator = 0                
         
+    def reset(self, seed = 0, reward_fn=None,  fixed_fee=None, proportional_fee=None, liquid_time = LIQUIDATION_TIME, num_trades = NUM_N, lamb = LLAMBDA):
         
-    def reset(self, seed = 0, reward_fn=None, liquid_time = LIQUIDATION_TIME, num_trades = NUM_N, lamb = LLAMBDA):
-        
-        
+        # Preserve existing fee parameters if new ones aren't provided
+        final_fixed_fee = self.fixed_fee if fixed_fee is None else fixed_fee
+        final_prop_fee = self.proportional_fee if proportional_fee is None else proportional_fee
+    
         # Initialize the environment with the given parameters
-        self.__init__(randomSeed = seed, lqd_time = liquid_time, num_tr = num_trades, lambd = lamb)
+        self.__init__(randomSeed = seed, reward_fn = reward_fn or self.reward_fn_name,
+                      fixed_fee=final_fixed_fee, proportional_fee=final_prop_fee, lqd_time = liquid_time, num_tr = num_trades, lambd = lamb)
         
         # Set the initial state to [0,0,0,0,0,0,1,1]
 
@@ -146,9 +149,7 @@ class HestonMertonFeesEnvironment():
                                                                np.log(self.current_variance) if self.current_variance > 0 else -10,  # Log variance 
                                                                1 if (self.jump_lambda > 0 and random.random() < 0.05) else 0  # Jump indicator 
                                                                ])
-
-        if reward_fn is not None:
-            self.reward_function = REWARD_FN_MAP[reward_fn]                                                   
+                
 
         return self.initial_state
 
@@ -177,7 +178,7 @@ class HestonMertonFeesEnvironment():
         self.prevUtility = self.compute_AC_utility(self.total_shares)
         
 
-    def step(self, action, reward_function='default'):
+    def step(self, action):
         
         # Create a class that will be used to keep track of information about the transaction
         class Info(object):
@@ -197,11 +198,9 @@ class HestonMertonFeesEnvironment():
             info.implementation_shortfall = self.total_shares * self.startingPrice - self.totalCapture
 
             # Calculate total fees paid
-            info.total_fixed_fees = self.fee_fixed * (self.num_n - self.timeHorizon)
-            gross_trade_value = self.total_shares * self.startingPrice
-            info.total_proportional_fees = self.fee_prop * (gross_trade_value - self.totalCapture)
+            info.total_fixed_fees = self.fixed_fee * (self.num_n - self.timeHorizon)
+            info.total_proportional_fees = self.proportional_fee * (self.total_shares * self.startingPrice - self.totalCapture)
             info.total_fees = info.total_fixed_fees + info.total_proportional_fees
-
 
 
             info.expected_shortfall = self.get_expected_shortfall(self.total_shares)
@@ -273,8 +272,9 @@ class HestonMertonFeesEnvironment():
             trade_value = info.share_to_sell_now * info.exec_price
 
             # Calculate trading fees
-            fixed_fee, proportional_fee = self.compute_fees(info.exec_price, info.share_to_sell_now)
-            total_fees = fixed_fee + proportional_fee
+            fixed_fee_t = self.fixed_fee if info.share_to_sell_now > 0 else 0
+            proportional_fee_t = self.proportional_fee * trade_value
+            total_fees = fixed_fee_t + proportional_fee_t
 
             # Calculate net proceeds after fees
             net_proceeds = trade_value - total_fees
@@ -283,8 +283,8 @@ class HestonMertonFeesEnvironment():
             self.totalCapture += net_proceeds
 
             # Store fee information in the info object
-            info.fixed_fee = fixed_fee
-            info.proportional_fee = proportional_fee
+            info.fixed_fee = fixed_fee_t
+            info.proportional_fee = proportional_fee_t
             info.total_fees = total_fees
 
             # Calculate the log return for the current step and save it in the logReturn deque
@@ -314,6 +314,8 @@ class HestonMertonFeesEnvironment():
                    
                 # Set the done flag to True. This indicates that we have sold all the shares
                 info.done = True
+
+
         else:
             reward = 0.0
         
@@ -340,13 +342,6 @@ class HestonMertonFeesEnvironment():
         ti = (self.epsilon * np.sign(sharesToSell)) + ((self.eta / self.tau) * sharesToSell)
         return ti
     
-    def compute_fees(self, exec_price, shares):
-        value = exec_price * shares
-        fixed = FIXED_FEE_PER_TRADE if shares > 0 else 0
-        proportional = PROPORTIONAL_FEE_RATE * value
-        return fixed, proportional
-
-    
     def get_expected_shortfall(self, sharesToSell):
         # Calculate the expected shortfall according to equation (8) of the AC paper
         ft = 0.5 * self.gamma * (sharesToSell ** 2)        
@@ -355,9 +350,8 @@ class HestonMertonFeesEnvironment():
 
         # Add expected fees (fixed fee per trade + proportional fee)
         expected_trades = self.num_n
-        expected_fixed_fees = self.fee_fixed * expected_trades
-        expected_prop_fees = self.fee_prop * (sharesToSell * self.startingPrice)
-
+        expected_fixed_fees = self.fixed_fee * expected_trades
+        expected_prop_fees = self.proportional_fee * (sharesToSell * self.startingPrice)
     
         return ft + st + tt + expected_fixed_fees + expected_prop_fees
 
@@ -376,8 +370,8 @@ class HestonMertonFeesEnvironment():
 
         # Add expected fees
         expected_trades = self.num_n
-        expected_fixed_fees = FIXED_FEE_PER_TRADE * expected_trades
-        expected_prop_fees = PROPORTIONAL_FEE_RATE * (sharesToSell * self.startingPrice)
+        expected_fixed_fees = self.fixed_fee * expected_trades
+        expected_prop_fees = self.proportional_fee * (sharesToSell * self.startingPrice)
    
         return ac_shortfall + expected_fixed_fees + expected_prop_fees  
         
@@ -415,7 +409,6 @@ class HestonMertonFeesEnvironment():
      
         
     def observation_space_dimension(self):
-
         return 10  # Was previously 8
     
     

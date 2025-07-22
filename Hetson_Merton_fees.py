@@ -150,7 +150,6 @@ class HMFMarketEnvironment():
                                                                1 if (self.jump_lambda > 0 and random.random() < 0.05) else 0  # Jump indicator 
                                                                ])
                 
-
         return self.initial_state
 
     

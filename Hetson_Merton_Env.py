@@ -137,8 +137,6 @@ class HMMarketEnvironment():
                                                                np.log(self.current_variance) if self.current_variance > 0 else -10,  # Log variance 
                                                                1 if (self.jump_lambda > 0 and random.random() < 0.05) else 0  # Jump indicator 
                                                                ])
-        if reward_fn is not None:
-            self.reward_function = REWARD_FN_MAP[reward_fn]
 
         return self.initial_state
 

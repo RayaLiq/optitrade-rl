@@ -113,9 +113,6 @@ class GBMMarketEnvironment():
         self.initial_state = np.array(list(self.logReturns) + [self.timeHorizon / self.num_n, \
                                                                self.shares_remaining / self.total_shares])
 
-        if reward_fn is not None:
-            self.reward_function = REWARD_FN_MAP[reward_fn]
-
         return self.initial_state
 
     

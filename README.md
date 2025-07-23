@@ -43,7 +43,6 @@ rewards/
   core.py
 scripts/
   runner.py
-  run_parallel_rl_experiments.py
 ```
 
 ---

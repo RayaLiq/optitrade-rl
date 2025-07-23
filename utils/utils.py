@@ -3,7 +3,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
 
-import syntheticChrissAlmgren as sca
+import envs.chriss_almgren as sca
 
 from statsmodels.iolib.table import SimpleTable
 from itertools import zip_longest

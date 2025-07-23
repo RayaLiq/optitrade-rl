@@ -2,9 +2,7 @@ import numpy as np
 import random
 import copy
 from collections import namedtuple, deque
-from actions import transform_action
-
-from model import Actor, Critic
+from models.ddpg_model import Actor, Critic
 
 import torch
 import torch.nn.functional as F
@@ -65,7 +63,7 @@ class Agent():
             experiences = self.memory.sample()
             self.learn(experiences, GAMMA)
 
-    def act(self, state, add_noise=True, transform_method=None):
+    def act(self, state, add_noise=True):
         """Returns actions for given state as per current policy."""
         state = torch.from_numpy(state).float().to(device)
         self.actor_local.eval()
@@ -75,9 +73,6 @@ class Agent():
         if add_noise:
             action += self.noise.sample()
         action = (action + 1.0) / 2.0
-
-        if transform_method:  
-            action = transform_action(action, method=transform_method)
 
         return np.clip(action, 0, 1)
 

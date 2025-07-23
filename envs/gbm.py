@@ -1,8 +1,7 @@
 import random
 import numpy as np
 import collections
-from rewards import REWARD_FN_MAP
-
+from rewards.core import REWARD_FN_MAP
 
 
 # ------------------------------------------------ Financial Parameters --------------------------------------------------- #
@@ -19,8 +18,8 @@ DAILY_VOLAT = ANNUAL_VOLAT / np.sqrt(TRAD_DAYS)    # Daily volatility in stock p
 TOTAL_SHARES = 1000000                                               # Total number of shares to sell
 STARTING_PRICE = 50                                                  # Starting price per share
 LLAMBDA = 1e-6                                                       # Trader's risk aversion
-LIQUIDATION_TIME = 120                                                # How many days to sell all the shares. 
-NUM_N = 120                                                           # Number of trades
+LIQUIDATION_TIME = 60                                                # How many days to sell all the shares. 
+NUM_N = 60                                                           # Number of trades
 EPSILON = BID_ASK_SP / 2                                             # Fixed Cost of Selling.
 SINGLE_STEP_VARIANCE = (DAILY_VOLAT  * STARTING_PRICE) ** 2          # Calculate single step variance
 ETA = BID_ASK_SP / (0.01 * DAILY_TRADE_VOL)                          # Price Impact for Each 1% of Daily Volume Traded
@@ -37,32 +36,16 @@ DELTA_T = 1 / TRAD_DAYS  # Time step in years
 EXPECTED_RETURN = RISK_FREE_RATE + BETA * (MARKET_RETURN - RISK_FREE_RATE)
 
 
-# --------------- Heston & Merton Parameters ---------------- #
-HESTON_KAPPA = 3.0        # Volatility mean-reversion speed
-HESTON_THETA = 0.12**2    # Long-term variance (0.12^2)
-HESTON_SIGMA_V = 0.1      # Volatility of volatility
-HESTON_RHO = -0.7         # Price/vol correlation
-HESTON_V0 = 0.12**2       # Initial variance
-
-MERTON_LAMBDA = 0.5       # Jump intensity (jumps/year)
-MERTON_MU_J = -0.05       # Mean jump size (log)
-MERTON_SIGMA_J = 0.1      # Jump size volatility
-
-# ----------------------- Trading Fee Parameters ----------------------- #
-FIXED_FEE_PER_TRADE = 10.0      # $10 fixed fee per transaction
-PROPORTIONAL_FEE_RATE = 0.001   # 0.1% fee on trade value
 
 # Simulation Environment
 
-class HMFMarketEnvironment():
+class GBMMarketEnvironment():
     
     def __init__(self, randomSeed = 0,
                  lqd_time = LIQUIDATION_TIME,
                  num_tr = NUM_N,
                  lambd = LLAMBDA,
-                 reward_fn="ac_utility",
-                 fixed_fee=FIXED_FEE_PER_TRADE,  # Use the global constant as default
-                 proportional_fee=PROPORTIONAL_FEE_RATE):  # Use the global constant as default
+                 reward_fn="ac_utility"):
         
         # Set the random seed
         random.seed(randomSeed)
@@ -83,6 +66,9 @@ class HMFMarketEnvironment():
         self.singleStepVariance = SINGLE_STEP_VARIANCE
         self.eta = ETA
         self.gamma = GAMMA
+
+        self.cumulative_volume = 0
+        self.vwap_numerator = 0
 
         # Initialize the GBM parameters
         self.delta_t = DELTA_T
@@ -112,44 +98,21 @@ class HMFMarketEnvironment():
         # Set a reward function
         self.reward_fn_name = reward_fn  # Store reward function name
         self.reward_function = REWARD_FN_MAP[reward_fn]
-
-        # Initialize Heston parameters
-        self.heston_kappa = HESTON_KAPPA
-        self.heston_theta = HESTON_THETA
-        self.heston_sigma_v = HESTON_SIGMA_V
-        self.heston_rho = HESTON_RHO
-        self.current_variance = HESTON_V0  # Track current variance
-
-        # Initialize Merton parameters
-        self.jump_lambda = MERTON_LAMBDA
-        self.jump_mu = MERTON_MU_J
-        self.jump_sigma = MERTON_SIGMA_J
-
-        # Fee parameters - these are the key additions
-        self.fixed_fee = fixed_fee
-        self.proportional_fee = proportional_fee
-                       
+        
         # Set the VWAP reward function variables             
         self.cumulative_volume = 0
-        self.vwap_numerator = 0                
+        self.vwap_numerator = 0
         
-    def reset(self, seed = 0, reward_fn=None,  fixed_fee=None, proportional_fee=None, liquid_time = LIQUIDATION_TIME, num_trades = NUM_N, lamb = LLAMBDA):
+                
+    def reset(self, seed = 0, reward_fn=None, liquid_time = LIQUIDATION_TIME, num_trades = NUM_N, lamb = LLAMBDA):
         
-        # Preserve existing fee parameters if new ones aren't provided
-        final_fixed_fee = self.fixed_fee if fixed_fee is None else fixed_fee
-        final_prop_fee = self.proportional_fee if proportional_fee is None else proportional_fee
-    
         # Initialize the environment with the given parameters
-        self.__init__(randomSeed = seed, reward_fn = reward_fn or self.reward_fn_name,
-                      fixed_fee=final_fixed_fee, proportional_fee=final_prop_fee, lqd_time = liquid_time, num_tr = num_trades, lambd = lamb)
+        self.__init__(randomSeed = seed, reward_fn = reward_fn or self.reward_fn_name, lqd_time = liquid_time, num_tr = num_trades, lambd = lamb)
         
         # Set the initial state to [0,0,0,0,0,0,1,1]
+        self.initial_state = np.array(list(self.logReturns) + [self.timeHorizon / self.num_n, \
+                                                               self.shares_remaining / self.total_shares])
 
-        self.initial_state = np.array(list(self.logReturns) + [self.timeHorizon / self.num_n, self.shares_remaining / self.total_shares, 
-                                                               np.log(self.current_variance) if self.current_variance > 0 else -10,  # Log variance 
-                                                               1 if (self.jump_lambda > 0 and random.random() < 0.05) else 0  # Jump indicator 
-                                                               ])
-                
         return self.initial_state
 
     
@@ -195,52 +158,18 @@ class HMFMarketEnvironment():
             self.transacting = False
             info.done = True
             info.implementation_shortfall = self.total_shares * self.startingPrice - self.totalCapture
-
-            # Calculate total fees paid
-            info.total_fixed_fees = self.fixed_fee * (self.num_n - self.timeHorizon)
-            info.total_proportional_fees = self.proportional_fee * (self.total_shares * self.startingPrice - self.totalCapture)
-            info.total_fees = info.total_fixed_fees + info.total_proportional_fees
-
-
             info.expected_shortfall = self.get_expected_shortfall(self.total_shares)
             info.expected_variance = self.singleStepVariance * self.tau * self.totalSRSQ
             info.utility = info.expected_shortfall + self.llambda * info.expected_variance
-            
-        # We don't add noise before the first trade    
+      
         if self.k == 0:
             info.price = self.prevImpactedPrice
-
         else:
-            # Convert time step to years
-            tau_in_years = self.tau / TRAD_DAYS
-    
-            # 1. Generate correlated Brownian motions
-            Z1 = random.normalvariate(0, 1)
-            Z2 = random.normalvariate(0, 1)
-            dW1 = Z1 * np.sqrt(tau_in_years)
-            dW2 = self.heston_rho * dW1 + np.sqrt(1 - self.heston_rho**2) * Z2 * np.sqrt(tau_in_years)
-    
-            # 2. Update Heston variance (with full truncation scheme)
-            v_old = self.current_variance
-            v_plus = max(v_old, 0)  # Ensure non-negative
-            v_new = v_old + self.heston_kappa * (self.heston_theta - v_plus) * tau_in_years + \
-                 self.heston_sigma_v * np.sqrt(v_plus) * dW2
-            self.current_variance = max(v_new, 0)  # Truncate at 0
-    
-            # 3. Calculate log return from Heston model
-            log_return = (self.mu - 0.5 * v_plus) * tau_in_years + np.sqrt(v_plus) * dW1
-    
-            # 4. Add Merton jumps
-            if self.jump_lambda > 0:
-                jump_prob = 1 - np.exp(-self.jump_lambda * tau_in_years)
-                if random.random() < jump_prob:
-                    jump_size = np.exp(self.jump_mu + self.jump_sigma * random.normalvariate(0, 1))
-                    log_return += np.log(jump_size)
-    
-            # 5. Compute new fundamental price
-            fundamental_price = self.prevImpactedPrice * np.exp(log_return)
-            info.price = fundamental_price
-
+            epsilon = random.normalvariate(0, 1)
+            drift = (self.mu - 0.5 * self.sigma ** 2) * self.delta_t
+            diffusion = self.sigma * np.sqrt(self.delta_t) * epsilon
+            info.price = self.prevImpactedPrice * np.exp(drift + diffusion)
+      
         # If we are transacting, the stock price is affected by the number of shares we sell. The price evolves 
         # according to the Almgren and Chriss price dynamics model. 
         if self.transacting:
@@ -251,7 +180,7 @@ class HMFMarketEnvironment():
 
             # Convert the action to the number of shares to sell in the current step
             sharesToSellNow = self.shares_remaining * action
-            #sharesToSellNow = min(self.shares_remaining * action, self.shares_remaining)
+#             sharesToSellNow = min(self.shares_remaining * action, self.shares_remaining)
     
             if self.timeHorizon < 2:
                 sharesToSellNow = self.shares_remaining
@@ -267,24 +196,7 @@ class HMFMarketEnvironment():
             info.exec_price = info.price - info.currentTemporaryImpact
             
             # Calculate the current total capture
-            # Calculate trade value before fees
-            trade_value = info.share_to_sell_now * info.exec_price
-
-            # Calculate trading fees
-            fixed_fee_t = self.fixed_fee if info.share_to_sell_now > 0 else 0
-            proportional_fee_t = self.proportional_fee * trade_value
-            total_fees = fixed_fee_t + proportional_fee_t
-
-            # Calculate net proceeds after fees
-            net_proceeds = trade_value - total_fees
-
-            # Update total capture with net proceeds
-            self.totalCapture += net_proceeds
-
-            # Store fee information in the info object
-            info.fixed_fee = fixed_fee_t
-            info.proportional_fee = proportional_fee_t
-            info.total_fees = total_fees
+            self.totalCapture += info.share_to_sell_now * info.exec_price
 
             # Calculate the log return for the current step and save it in the logReturn deque
             self.logReturns.append(np.log(info.price/self.prevPrice))
@@ -300,8 +212,8 @@ class HMFMarketEnvironment():
             # Update the variables required for the next step
             self.timeHorizon -= 1
             self.prevPrice = info.price
-            self.prevImpactedPrice = info.price - info.currentPermanentImpact
-            
+            self.prevImpactedPrice = info.price - info.currentPermanentImpact     
+
             # Calculate the reward
             reward = self.reward_function(self, info, action)
 
@@ -314,18 +226,13 @@ class HMFMarketEnvironment():
                 # Set the done flag to True. This indicates that we have sold all the shares
                 info.done = True
 
-
         else:
             reward = 0.0
         
         self.k += 1
             
         # Set the new state
-        # Replace existing state with:
-        state = np.array(list(self.logReturns) + [self.timeHorizon / self.num_n, self.shares_remaining / self.total_shares,
-                                                  np.log(self.current_variance) if self.current_variance > 0 else -10,
-                                                  1 if (self.jump_lambda > 0 and random.random() < 0.05) else 0
-                                                  ])
+        state = np.array(list(self.logReturns) + [self.timeHorizon / self.num_n, self.shares_remaining / self.total_shares])
 
         return (state, np.array([reward]), info.done, info)
 
@@ -346,33 +253,19 @@ class HMFMarketEnvironment():
         ft = 0.5 * self.gamma * (sharesToSell ** 2)        
         st = self.epsilon * sharesToSell
         tt = (self.eta_hat / self.tau) * self.totalSSSQ
-
-        # Add expected fees (fixed fee per trade + proportional fee)
-        expected_trades = self.num_n
-        expected_fixed_fees = self.fixed_fee * expected_trades
-        expected_prop_fees = self.proportional_fee * (sharesToSell * self.startingPrice)
-    
-        return ft + st + tt + expected_fixed_fees + expected_prop_fees
+        return ft + st + tt
 
     
     def get_AC_expected_shortfall(self, sharesToSell):
         # Calculate the expected shortfall for the optimal strategy according to equation (20) of the AC paper
         ft = 0.5 * self.gamma * (sharesToSell ** 2)        
         st = self.epsilon * sharesToSell        
-        tt = self.eta_hat * (sharesToSell ** 2)
-
+        tt = self.eta_hat * (sharesToSell ** 2)       
         nft = np.tanh(0.5 * self.kappa * self.tau) * (self.tau * np.sinh(2 * self.kappa * self.liquidation_time) \
                                                       + 2 * self.liquidation_time * np.sinh(self.kappa * self.tau))       
         dft = 2 * (self.tau ** 2) * (np.sinh(self.kappa * self.liquidation_time) ** 2)   
-        fot = nft / dft  
-        ac_shortfall = ft + st + (tt * fot)  
-
-        # Add expected fees
-        expected_trades = self.num_n
-        expected_fixed_fees = self.fixed_fee * expected_trades
-        expected_prop_fees = self.proportional_fee * (sharesToSell * self.startingPrice)
-   
-        return ac_shortfall + expected_fixed_fees + expected_prop_fees  
+        fot = nft / dft       
+        return ft + st + (tt * fot)  
         
     
     def get_AC_variance(self, sharesToSell):
@@ -408,7 +301,8 @@ class HMFMarketEnvironment():
      
         
     def observation_space_dimension(self):
-        return 10  # Was previously 8
+        # Return the dimension of the state
+        return 8
     
     
     def action_space_dimension(self):

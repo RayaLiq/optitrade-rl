@@ -1,7 +1,7 @@
 import random
 import numpy as np
 import collections
-from rewards import REWARD_FN_MAP
+from rewards.core import REWARD_FN_MAP
 
 
 # ------------------------------------------------ Financial Parameters --------------------------------------------------- #
@@ -27,10 +27,31 @@ GAMMA = BID_ASK_SP / (0.1 * DAILY_TRADE_VOL)                         # Permanent
 
 # ----------------------------------------------------------------------------------------------------------------------- #
 
+RISK_FREE_RATE = 0.02   # 2% annual risk-free return
+MARKET_RETURN = 0.08    # 8% annual market return
+BETA = 1.1              # Assumed stock beta vs market
+
+# ------------------ GBM Parameters ------------------- #
+DELTA_T = 1 / TRAD_DAYS  # Time step in years
+EXPECTED_RETURN = RISK_FREE_RATE + BETA * (MARKET_RETURN - RISK_FREE_RATE)
+
+
+# --------------- Heston & Merton Parameters ---------------- #
+HESTON_KAPPA = 3.0        # Volatility mean-reversion speed
+HESTON_THETA = 0.12**2    # Long-term variance (0.12^2)
+HESTON_SIGMA_V = 0.1      # Volatility of volatility
+HESTON_RHO = -0.7         # Price/vol correlation
+HESTON_V0 = 0.12**2       # Initial variance
+
+MERTON_LAMBDA = 0.5       # Jump intensity (jumps/year)
+MERTON_MU_J = -0.05       # Mean jump size (log)
+MERTON_SIGMA_J = 0.1      # Jump size volatility
+
+
 
 # Simulation Environment
 
-class MarketEnvironment():
+class HMMarketEnvironment():
     
     def __init__(self, randomSeed = 0,
                  lqd_time = LIQUIDATION_TIME,
@@ -57,6 +78,11 @@ class MarketEnvironment():
         self.singleStepVariance = SINGLE_STEP_VARIANCE
         self.eta = ETA
         self.gamma = GAMMA
+
+        # Initialize the GBM parameters
+        self.delta_t = DELTA_T
+        self.mu = EXPECTED_RETURN
+        self.sigma = self.anv  # Annual volatility (sigma)
         
         # Calculate some Almgren-Chriss parameters
         self.tau = self.liquidation_time / self.num_n 
@@ -80,22 +106,37 @@ class MarketEnvironment():
 
         # Set a reward function
         self.reward_fn_name = reward_fn  # Store reward function name
-        self.reward_function = REWARD_FN_MAP[reward_fn]     
+        self.reward_function = REWARD_FN_MAP[reward_fn]        
+
+        # Initialize Heston parameters
+        self.heston_kappa = HESTON_KAPPA
+        self.heston_theta = HESTON_THETA
+        self.heston_sigma_v = HESTON_SIGMA_V
+        self.heston_rho = HESTON_RHO
+        self.current_variance = HESTON_V0  # Track current variance
+
+        # Initialize Merton parameters
+        self.jump_lambda = MERTON_LAMBDA
+        self.jump_mu = MERTON_MU_J
+        self.jump_sigma = MERTON_SIGMA_J
         
         # Set the VWAP reward function variables             
         self.cumulative_volume = 0
         self.vwap_numerator = 0
         
-                
+        
     def reset(self, seed = 0, reward_fn=None, liquid_time = LIQUIDATION_TIME, num_trades = NUM_N, lamb = LLAMBDA):
+        
         
         # Initialize the environment with the given parameters
         self.__init__(randomSeed = seed, reward_fn = reward_fn or self.reward_fn_name, lqd_time = liquid_time, num_tr = num_trades, lambd = lamb)
         
         # Set the initial state to [0,0,0,0,0,0,1,1]
-        self.initial_state = np.array(list(self.logReturns) + [self.timeHorizon / self.num_n, \
-                                                               self.shares_remaining / self.total_shares])
 
+        self.initial_state = np.array(list(self.logReturns) + [self.timeHorizon / self.num_n, self.shares_remaining / self.total_shares, 
+                                                               np.log(self.current_variance) if self.current_variance > 0 else -10,  # Log variance 
+                                                               1 if (self.jump_lambda > 0 and random.random() < 0.05) else 0  # Jump indicator 
+                                                               ])
 
         return self.initial_state
 
@@ -149,10 +190,38 @@ class MarketEnvironment():
         # We don't add noise before the first trade    
         if self.k == 0:
             info.price = self.prevImpactedPrice
+
         else:
-            # Calculate the current stock price using arithmetic brownian motion
-            info.price = self.prevImpactedPrice + np.sqrt(self.singleStepVariance * self.tau) * random.normalvariate(0, 1)
-      
+            # Convert time step to years
+            tau_in_years = self.tau / TRAD_DAYS
+    
+            # 1. Generate correlated Brownian motions
+            Z1 = random.normalvariate(0, 1)
+            Z2 = random.normalvariate(0, 1)
+            dW1 = Z1 * np.sqrt(tau_in_years)
+            dW2 = self.heston_rho * dW1 + np.sqrt(1 - self.heston_rho**2) * Z2 * np.sqrt(tau_in_years)
+    
+            # 2. Update Heston variance (with full truncation scheme)
+            v_old = self.current_variance
+            v_plus = max(v_old, 0)  # Ensure non-negative
+            v_new = v_old + self.heston_kappa * (self.heston_theta - v_plus) * tau_in_years + \
+                 self.heston_sigma_v * np.sqrt(v_plus) * dW2
+            self.current_variance = max(v_new, 0)  # Truncate at 0
+    
+            # 3. Calculate log return from Heston model
+            log_return = (self.mu - 0.5 * v_plus) * tau_in_years + np.sqrt(v_plus) * dW1
+    
+            # 4. Add Merton jumps
+            if self.jump_lambda > 0:
+                jump_prob = 1 - np.exp(-self.jump_lambda * tau_in_years)
+                if random.random() < jump_prob:
+                    jump_size = np.exp(self.jump_mu + self.jump_sigma * random.normalvariate(0, 1))
+                    log_return += np.log(jump_size)
+    
+            # 5. Compute new fundamental price
+            fundamental_price = self.prevImpactedPrice * np.exp(log_return)
+            info.price = fundamental_price
+
         # If we are transacting, the stock price is affected by the number of shares we sell. The price evolves 
         # according to the Almgren and Chriss price dynamics model. 
         if self.transacting:
@@ -196,10 +265,10 @@ class MarketEnvironment():
             self.timeHorizon -= 1
             self.prevPrice = info.price
             self.prevImpactedPrice = info.price - info.currentPermanentImpact
-            
+
             # Calculate the reward
             reward = self.reward_function(self, info, action)
-            
+
             # If all the shares have been sold calculate E, V, and U, and give a positive reward.
             if self.shares_remaining <= 0:
                 
@@ -208,13 +277,19 @@ class MarketEnvironment():
                    
                 # Set the done flag to True. This indicates that we have sold all the shares
                 info.done = True
+
+
         else:
             reward = 0.0
         
         self.k += 1
             
         # Set the new state
-        state = np.array(list(self.logReturns) + [self.timeHorizon / self.num_n, self.shares_remaining / self.total_shares])
+        # Replace existing state with:
+        state = np.array(list(self.logReturns) + [self.timeHorizon / self.num_n, self.shares_remaining / self.total_shares,
+                                                  np.log(self.current_variance) if self.current_variance > 0 else -10,
+                                                  1 if (self.jump_lambda > 0 and random.random() < 0.05) else 0
+                                                  ])
 
         return (state, np.array([reward]), info.done, info)
 
@@ -283,8 +358,8 @@ class MarketEnvironment():
      
         
     def observation_space_dimension(self):
-        # Return the dimension of the state
-        return 8
+
+        return 10  # Was previously 8
     
     
     def action_space_dimension(self):

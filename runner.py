@@ -4,13 +4,19 @@ import numpy as np
 from collections import deque
 import torch
 import matplotlib.pyplot as plt
+
 from syntheticChrissAlmgren import MarketEnvironment
 from GBM import GBMMarketEnvironment
 from Hetson_Merton_Env import HMMarketEnvironment
 from Hetson_Merton_fees import HMFMarketEnvironment
+
 from ddpg_agent import Agent
+from td3_agent import TD3Agent
+from sac_agent import SACAgent
+
 from rewards import REWARD_FN_MAP
 from actions import transform_action, TRANSFORMS
+
 import os
 import sys
 import pandas as pd
@@ -20,17 +26,25 @@ from utils import plot_training_losses
 from utils import plot_training_performance
 
 def parse_args():
+    
     parser = argparse.ArgumentParser(description='DDPG Agent for Optimal Trade Execution')
+
     parser.add_argument('--seed', type=int, default=0, help='Random seed')
+    parser.add_argument('--agent', type=str, default="ddpg", choices=["ddpg", "td3", "sac"], help="RL agent type")
     parser.add_argument('--reward', nargs='+', default=['ac_utility'], choices=list(REWARD_FN_MAP.keys()), help='Reward function(s)')
     parser.add_argument('--env', type=str, default="AC", choices=["AC", "GBM", "HM", "HMF"], help='Market environment type')
     parser.add_argument('--action', nargs='+', default=['linear'], choices=list(TRANSFORMS.keys()), help="Agent action strategy/strategies")
+    
+    agent_sac_group = parser.add_argument_group('sac agent parameters', 'Parameters specific to sac agent')
+
+    
+    agent_td3_group = parser.add_argument_group('td3 agent parameters', 'Parameters specific to td3 agent')
+    agent_td3_group.add_argument('--policy_delay', type=int, default=2)
+
     # Fee arguments (only used with HMF environment)
     fee_group = parser.add_argument_group('HMF environment fees', 'Parameters specific to Heston-Merton with Fees environment')
-    fee_group.add_argument('--fixed_fee', type=float, default=10.0,
-                         help='Fixed fee per trade (only for HMF environment)')
-    fee_group.add_argument('--proportional_fee', type=float, default=0.001,
-                         help='Proportional fee rate (only for HMF environment)')
+    fee_group.add_argument('--fixed_fee', type=float, default=10.0,help='Fixed fee per trade (only for HMF environment)')
+    fee_group.add_argument('--proportional_fee', type=float, default=0.001,help='Proportional fee rate (only for HMF environment)')
 
     parser.add_argument('--lqd_time', type=float, default=60.0, help='Liquidation time (days)')
     parser.add_argument('--num_tr', type=int, default=60, help='Number of trades')
@@ -45,6 +59,7 @@ def parse_args():
               file=sys.stderr)
 
     return args
+
 
 def save_results(agent_name, env_name, reward_func, action_strategy, avg_implementation_shortfall,
                  fixed_fee=None, proportional_fee=None, filename='results/results.csv'):
@@ -76,13 +91,15 @@ def save_results(agent_name, env_name, reward_func, action_strategy, avg_impleme
 
 def main():
     args = parse_args()
-    
+
     # NEW: Loop through all combinations
     for reward_function in args.reward:
+
         for action_strategy in args.action:
-            print(f"\n{'='*80}")
-            print(f"STARTING TRAINING: Reward={reward_function}, Action={action_strategy}")
-            print(f"{'='*80}")
+
+            print(f"\n{'='*85}")
+            print(f"STARTING TRAINING: Agent={args.agent}, Environment={args.env}, Reward={reward_function}, Action={action_strategy}")
+            print(f"{'='*85}")
 
             if args.env == "AC":
                 # Initialize environment
@@ -129,12 +146,30 @@ def main():
                 raise ValueError(f"Unknown environment type: {args.env}")
 
 
-            # Initialize agent
-            agent = Agent(
-                state_size=env.observation_space_dimension(),
-                action_size=env.action_space_dimension(),
-                random_seed=args.seed
-            )
+            if args.agent == "ddpg":
+                # Initialize agent
+                agent = Agent(
+                    state_size=env.observation_space_dimension(),
+                    action_size=env.action_space_dimension(),
+                    random_seed=args.seed
+                )
+
+            elif args.agent == "td3":    
+                # Initialize agent
+                agent = TD3Agent(state_size=env.observation_space_dimension(), 
+                                 action_size=env.action_space_dimension(), 
+                                 random_seed=args.seed
+                                 )                              
+            elif args.agent == "sac":    
+                # Initialize agent
+                agent = SACAgent(state_size=env.observation_space_dimension(), 
+                                 action_size=env.action_space_dimension(), 
+                                 random_seed=args.seed
+                                 )  
+                
+            else:
+                raise ValueError(f"Unknown agent type: {args.agent}. Use 'ddpg', 'sac', or 'td3'.")                
+
             
             episodes = args.episodes
             lqt = args.lqd_time
@@ -152,6 +187,7 @@ def main():
             if args.env == "HMF":
                 print(f"Fee parameters: fixed_fee={args.fixed_fee}, proportional_fee={args.proportional_fee}")
 
+
             for episode in range(episodes):
                 # Reset environment with new seed for each episode
                 cur_state = env.reset(seed = episode, reward_fn=reward_function, liquid_time = lqt, num_trades = n_trades, lamb = tr)
@@ -161,15 +197,15 @@ def main():
                 for i in range(n_trades + 1):
 
                     # Predict the best action for the current state. 
-                    raw_action = agent.act(cur_state, add_noise=True)
+                    raw_action = agent.act(cur_state)
                     action = transform_action(raw_action, env, action_strategy)
-                
+                    
                     # Action is performed and new state, reward, info are received. 
                     new_state, reward, done, info = env.step(action)
-                
+                    
                     # current state, action, reward, new state are stored in the experience replay
                     agent.step(cur_state, action, reward, new_state, done)
-                
+                    
                     # roll over new state
                     cur_state = new_state
 
@@ -177,9 +213,10 @@ def main():
                         shortfall_hist = np.append(shortfall_hist, info.implementation_shortfall)
                         shortfall_deque.append(info.implementation_shortfall)
                         break
-                
+                    
                 if (episode + 1) % 100 == 0: # print average shortfall over last 100 episodes
-                    print('\rEpisode [{}/{}]\tAverage Shortfall: ${:,.2f}'.format(episode + 1, episodes, np.mean(shortfall_deque)))        
+                    print('\rEpisode [{}/{}]\tAverage Shortfall: ${:,.2f}'.format(episode + 1, episodes, np.mean(shortfall_deque)))  
+
 
             avg_shortfall = np.mean(shortfall_hist)
             print('\nAverage Implementation Shortfall: ${:,.2f} \n'.format(avg_shortfall))
@@ -197,7 +234,7 @@ def main():
 
             # Save results to CSV
             save_results(
-                agent_name='DDPG',
+                agent_name=args.agent,
                 env_name = args.env,
                 reward_func=reward_function,
                 action_strategy=action_strategy,
@@ -218,7 +255,7 @@ def main():
             # Save training performance plot
             save_plot(
                 plot_training_performance, 
-                f'training_perf_{reward_function}_{action_strategy}_{timestamp}.png', 
+                f'training_perf_{args.agent}_{args.env}_{reward_function}_{action_strategy}.png', 
                 shortfall_hist, 
                 window_size=100, 
                 figsize=(12, 6)
@@ -227,7 +264,7 @@ def main():
             # Save training losses plot
             save_plot(
                 plot_training_losses, 
-                f'training_loss_{reward_function}_{action_strategy}_{timestamp}.png', 
+                f'training_loss_{args.agent}_{args.env}_{reward_function}_{action_strategy}.png', 
                 agent, 
                 window_size=100, 
                 figsize=(12, 6)
